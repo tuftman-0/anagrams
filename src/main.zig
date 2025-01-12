@@ -106,7 +106,7 @@ pub fn main() !void {
     std.debug.print("{d} words in wordlist\n", .{words.len});
 
     // const target = "floorp";
-    const target = "workman";
+    const target = "abracadabramonkeybutt";
     const target_combo = getLetterCounts(target);
 
 
