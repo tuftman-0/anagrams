@@ -1,6 +1,7 @@
 const std = @import("std");
 
 // https://stackoverflow.com/a/77053872/8062159
+//
 pub fn readWordsFromFile(filename: []const u8, allocator: std.mem.Allocator) ![][]const u8 {
     const file = try std.fs.cwd().openFile(filename, .{});
     defer file.close();
@@ -63,87 +64,6 @@ const ComboPair = struct {
 
 
 
-
-// // old version
-// pub fn printCombinations(
-//     target: @Vector(26, u8),
-//     wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
-//     current_words: std.ArrayList([]const u8),
-//     current_combo: std.ArrayList(@Vector(26, u8)),
-//     start_index: usize,
-//     allocator: std.mem.Allocator,
-// ) !void {
-//     const zero_vector: @Vector(26, u8) = @splat(0);
-    
-//     if (@reduce(.Or, target > zero_vector) == false) {
-//         try printWordsForCurrentCombo(current_combo.items, 0, current_words, wordmap, allocator);
-//         return;
-//     }
-
-//     const keys = wordmap.keys();
-
-//     // std.sort.block([26]u8, keys[start_index..], {}, struct {
-//     //     fn lessThan(_: void, a: [26]u8, b: [26]u8) bool {
-//     //         var sum_a: u16 = 0;
-//     //         var sum_b: u16 = 0;
-//     //         for (a) |v| sum_a += v;
-//     //         for (b) |v| sum_b += v;
-//     //         return sum_b < sum_a; // reverse sort (descending)
-//     //     }
-//     // }.lessThan);
-//     const remaining_keys = keys[start_index..];
-
-//     for (remaining_keys, start_index..) |vec, i| {
-//         if (@reduce(.Or, vec > target)) {
-//             continue;
-//         }
-
-//         const remaining = target - vec;
-
-//         var new_combo = try current_combo.clone();
-//         try new_combo.append(vec);
-
-//         try printCombinations(remaining, wordmap, current_words, new_combo, i, allocator);
-//     }
-// }
-
-
-// // old
-// fn printWordsForCurrentCombo(
-//     combo: []const @Vector(26, u8),
-//     index: usize,
-//     current_words: std.ArrayList([]const u8),
-//     wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
-//     allocator: std.mem.Allocator,
-// ) !void {
-//     const stdout = std.io.getStdOut().writer();
-
-//     if (index == combo.len) {
-//         for (current_words.items) |word| {
-//             try stdout.print("{s} ", .{word});
-//         }
-//         try stdout.writeAll("\n");
-//         return;
-//     }
-
-//     if (wordmap.get(combo[index])) |words| {
-//         for (words.items) |word| {
-//             var new_words = try current_words.clone();
-//             try new_words.append(word);
-//             try printWordsForCurrentCombo(combo, index + 1, new_words, wordmap, allocator);
-//         }
-//     }
-// }
-
-
-// returns true if b can fit inside a
-// pub fn is_inside(a: [26]u8) fn ([26]u8) bool {
-//     const f = fn (b: [26]u8) bool {
-//         return @reduce(.Or, b <= a)
-//     };
-//     return f;
-// }
-
 /// Filter a slice based on a predicate function, returning a new heap-allocated array
 /// Caller owns the returned memory
 pub fn filterSlice(
@@ -178,6 +98,7 @@ pub fn filterInside(
     }
     return try list.toOwnedSlice();
 }
+
 const Node = struct {
     vec: @Vector(26, u8),
     next: ?*Node,
@@ -203,21 +124,18 @@ pub fn printCombinations(
         try printWordsForCurrentCombo(current_combo, wordmap, allocator);
         return;
     }
-    if (remaining_combos.len == 0) {
-        return;
-    }
     
     for (remaining_combos, 0..) |vec, i| {
         if (@reduce(.Or, vec > target)) {
             continue;
         }
         const remaining = target - vec;
-        // const new_combos = filterSlice((, allocator: std.mem.Allocator, items: []const T, pred: fn(T)bool)
         const new_node = try Node.init(vec, current_combo, allocator);
-
-        const filtered_combos = try filterInside(allocator, remaining_combos[i..], target);
         defer allocator.destroy(new_node);
-        
+
+        const filtered_combos = try filterInside(allocator, remaining_combos[i..], remaining);
+        defer allocator.free(filtered_combos);
+       
         try printCombinations(remaining, filtered_combos, new_node, wordmap, allocator);
     }
 }
@@ -238,18 +156,12 @@ fn printWordsForCurrentCombo(
     const vec_array: [26]u8 = combo.?.vec;
     if (wordmap.get(vec_array)) |words| {
         for (words.items) |word| {
-            const new_node = combo.?.next;
             try stdout.print("{s} ", .{word});
-            try printWordsForCurrentCombo(new_node, wordmap, allocator);
+            try printWordsForCurrentCombo(combo.?.next, wordmap, allocator);
         }
     }
 }
 
-
-pub fn printAnagrams(input: []const u8, wordmap: std.AutoHashMap([26]u8, std.ArrayList([]const u8))) !void {
-    _ = input;
-    _ = wordmap;
-}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
