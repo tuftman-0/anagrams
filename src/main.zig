@@ -6,6 +6,7 @@ pub fn readWordsFromFile(filename: []const u8, allocator: std.mem.Allocator) ![]
     defer file.close();
     const file_size = try file.getEndPos();
     const buffer = try allocator.alloc(u8, file_size);
+    // defer allocator.free(buffer); // breaks everything because it frees too early
     _ = try file.readAll(buffer);
     var lines = std.mem.splitSequence(u8, buffer, "\n");
     var words = std.ArrayList([]const u8).init(allocator);
@@ -18,9 +19,7 @@ pub fn readWordsFromFile(filename: []const u8, allocator: std.mem.Allocator) ![]
     return words.toOwnedSlice();
 }
 
-//words -> combo word pairs -> filtered combo word pairs -> words grouped by combo
-//[]string -> [](combo, string) -> [](combo, string) -> [](combo, []string)
-//
+// words -> combo word pairs -> filtered combo word pairs -> words grouped by combo
 
 pub fn getLetterCounts(word: []const u8) @Vector(26, u8) {
     // construct a 26 byte long array to store the number of each letter
@@ -37,16 +36,6 @@ pub fn getLetterCounts(word: []const u8) @Vector(26, u8) {
         }
     }
     return counts;
-}
-
-// returns true if a can fit inside b
-pub fn vec26_is_inside(a: [26]u8, b: [26]u8) bool {
-    for (a, b) |ca, cb| {
-        if (ca > cb) {
-            return false;
-        }
-    }
-    return true;
 }
 
 pub fn getFilteredWordComboPairs(target: []const u8, words: [][]const u8, allocator: std.mem.Allocator) ![]ComboPair {
@@ -72,25 +61,172 @@ const ComboPair = struct {
     word: []const u8,
 };
 
-// pub fn makeHashMap(comboPairs: []ComboPair) std.AutoHashMap([26]u8, std.ArrayList([]const u8)) {  }
 
-// pub fn get_combo_from_words(words: [][]u8) []ComboVector {
-//     for (words) |w| {
-//         std.debug.print(w);
+
+
+// // old version
+// pub fn printCombinations(
+//     target: @Vector(26, u8),
+//     wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
+//     current_words: std.ArrayList([]const u8),
+//     current_combo: std.ArrayList(@Vector(26, u8)),
+//     start_index: usize,
+//     allocator: std.mem.Allocator,
+// ) !void {
+//     const zero_vector: @Vector(26, u8) = @splat(0);
+    
+//     if (@reduce(.Or, target > zero_vector) == false) {
+//         try printWordsForCurrentCombo(current_combo.items, 0, current_words, wordmap, allocator);
+//         return;
+//     }
+
+//     const keys = wordmap.keys();
+
+//     // std.sort.block([26]u8, keys[start_index..], {}, struct {
+//     //     fn lessThan(_: void, a: [26]u8, b: [26]u8) bool {
+//     //         var sum_a: u16 = 0;
+//     //         var sum_b: u16 = 0;
+//     //         for (a) |v| sum_a += v;
+//     //         for (b) |v| sum_b += v;
+//     //         return sum_b < sum_a; // reverse sort (descending)
+//     //     }
+//     // }.lessThan);
+//     const remaining_keys = keys[start_index..];
+
+//     for (remaining_keys, start_index..) |vec, i| {
+//         if (@reduce(.Or, vec > target)) {
+//             continue;
+//         }
+
+//         const remaining = target - vec;
+
+//         var new_combo = try current_combo.clone();
+//         try new_combo.append(vec);
+
+//         try printCombinations(remaining, wordmap, current_words, new_combo, i, allocator);
 //     }
 // }
 
-// pub fn comboCombos(target: @Vector(26, u8) , combo_list: []@Vector(26, u8), result: std.ArrayList(@Vector(26, u8))) [][]@Vector(26, u8) {
-//     return result;
+
+// // old
+// fn printWordsForCurrentCombo(
+//     combo: []const @Vector(26, u8),
+//     index: usize,
+//     current_words: std.ArrayList([]const u8),
+//     wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
+//     allocator: std.mem.Allocator,
+// ) !void {
+//     const stdout = std.io.getStdOut().writer();
+
+//     if (index == combo.len) {
+//         for (current_words.items) |word| {
+//             try stdout.print("{s} ", .{word});
+//         }
+//         try stdout.writeAll("\n");
+//         return;
+//     }
+
+//     if (wordmap.get(combo[index])) |words| {
+//         for (words.items) |word| {
+//             var new_words = try current_words.clone();
+//             try new_words.append(word);
+//             try printWordsForCurrentCombo(combo, index + 1, new_words, wordmap, allocator);
+//         }
+//     }
 // }
 
 
+// returns true if b can fit inside a
+pub fn is_inside(a: [26]u8, b: [26]u8) bool {
+    return @reduce(.Or, a > b);
+}
 
-// TODO
-// figure out type of wordmap input
-// figure out how ta
-// make/find cartesian product function
-// 
+/// Filter a slice based on a predicate function, returning a new heap-allocated array
+/// Caller owns the returned memory
+pub fn filterSlice(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    items: []const T,
+    pred: fn (T) bool,
+) ![]T {
+    var list = std.ArrayList(T).init(allocator);
+    errdefer list.deinit();
+    for (items) |item| {
+        if (pred(item)) {
+            try list.append(item);
+        }
+    }
+    return try list.toOwnedSlice();
+}
+
+
+
+
+
+const Node = struct {
+    vec: @Vector(26, u8),
+    next: ?*Node,
+
+    pub fn init(vec: @Vector(26, u8), next: ?*Node, allocator: std.mem.Allocator) !*Node {
+        const node = try allocator.create(Node);
+        node.* = .{ .vec = vec, .next = next };
+        return node;
+    }
+};
+
+
+pub fn printCombinations(
+    target: @Vector(26, u8),
+    remaining_combos: [][26]u8,
+    current_combo: ?*Node,
+    wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
+    allocator: std.mem.Allocator,
+) !void {
+    const zero_vector: @Vector(26, u8) = @splat(0);
+    
+    if (@reduce(.Or, target > zero_vector) == false) {
+        try printWordsForCurrentCombo(current_combo, wordmap, allocator);
+        return;
+    }
+    // filtered_combos = filterSlika
+    
+    for (remaining_combos, 0..) |vec, i| {
+        if (@reduce(.Or, vec > target)) {
+            continue;
+        }
+        
+        const remaining = target - vec;
+        // const new_combos = filterSlice((, allocator: std.mem.Allocator, items: []const T, pred: fn(T)bool)
+        const new_node = try Node.init(vec, current_combo, allocator);
+        defer allocator.destroy(new_node);
+        
+        try printCombinations(remaining, remaining_combos[i..], new_node, wordmap, allocator);
+    }
+}
+
+fn printWordsForCurrentCombo(
+    combo: ?*Node,
+    wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
+    allocator: std.mem.Allocator,
+) !void {
+    const stdout = std.io.getStdOut().writer();
+
+    if (combo == null) {
+        try stdout.writeAll("\n");
+        return;
+    }
+
+    // Convert vector back to array for hashmap lookup
+    const vec_array: [26]u8 = combo.?.vec;
+    if (wordmap.get(vec_array)) |words| {
+        for (words.items) |word| {
+            const new_node = combo.?.next;
+            try stdout.print("{s} ", .{word});
+            try printWordsForCurrentCombo(new_node, wordmap, allocator);
+        }
+    }
+}
+
 
 pub fn printAnagrams(input: []const u8, wordmap: std.AutoHashMap([26]u8, std.ArrayList([]const u8))) !void {
     _ = input;
@@ -98,22 +234,42 @@ pub fn printAnagrams(input: []const u8, wordmap: std.AutoHashMap([26]u8, std.Arr
 }
 
 pub fn main() !void {
-    // const allocator = std.heap.page_allocator;
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
-    const words = try readWordsFromFile("/home/josh/.local/bin/words.txt", allocator);
-    defer allocator.free(words);
-    std.debug.print("{d} words in wordlist\n", .{words.len});
 
-    // const target = "floorp";
-    const target = "abracadabramonkeybutt";
+    // Get command line args
+    var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
+
+    // Skip program name
+    _ = args.next();
+
+    // Get input either from args or stdin
+    var input: []const u8 = undefined;
+    var input_buf: [1024]u8 = undefined;
+
+    if (args.next()) |arg| {
+        // Use command line argument
+        input = arg;
+    } else {
+        // Read from stdin
+        const stdin = std.io.getStdIn();
+        const bytes_read = try stdin.read(&input_buf);
+        input = std.mem.trimRight(u8, input_buf[0..bytes_read], "\r\n");
+    }
+
+    const target = input;
     const target_combo = getLetterCounts(target);
 
+    const words = try readWordsFromFile("/home/josh/.local/bin/words.txt", allocator);
+    defer allocator.free(words);
+    // std.debug.print("{d} words in wordlist\n", .{words.len});
 
-    std.debug.print("{any}: {s}\n", .{target_combo, target});
+    // std.debug.print("{any}: {s}\n", .{ target_combo, target });
     const pairs = try getFilteredWordComboPairs(target, words, allocator);
     defer allocator.free(pairs);
 
+    // build hashmap
     var hashmap = std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)).init(allocator);
     for (pairs) |pair| {
         const found = hashmap.getPtr(pair.combo);
@@ -126,16 +282,27 @@ pub fn main() !void {
         }
     }
 
-    var entries = hashmap.iterator();
+    // const initial_words = std.ArrayList([]const u8).init(allocator);
+
+    // try printAllCombinations(target_combo, hashmap, initial_words, allocator);
 
 
-    while (entries.next()) |entry| {
-        std.debug.print("{any}: {{ ", .{entry.key_ptr.*});
-        defer std.debug.print("}}\n", .{});
-        for (entry.value_ptr.*.items) |word| {
-            std.debug.print("{s}, ", .{word});
-        }
-    }
+    const vectors = hashmap.keys();
+    try printCombinations(target_combo, vectors, null, hashmap, allocator);
+
+    // const initial_combo = std.ArrayList(@Vector(26, u8)).init(allocator);
+    // const initial_combo: ?*Node = null;
+    // try printCombinations(target_combo, hashmap, initial_words, initial_combo, allocator);
+
+    // var entries = hashmap.iterator();
+
+    // while (entries.next()) |entry| {
+    //     std.debug.print("{any}: {{ ", .{entry.key_ptr.*});
+    //     defer std.debug.print("}}\n", .{});
+    //     for (entry.value_ptr.*.items) |word| {
+    //         std.debug.print("{s}, ", .{word});
+    //     }
+    // }
 
     // for (pairs) |pair| {
     //     // std.debug.print("{any} ", .{combo});
