@@ -137,9 +137,12 @@ const ComboPair = struct {
 
 
 // returns true if b can fit inside a
-pub fn is_inside(a: [26]u8, b: [26]u8) bool {
-    return @reduce(.Or, a > b);
-}
+// pub fn is_inside(a: [26]u8) fn ([26]u8) bool {
+//     const f = fn (b: [26]u8) bool {
+//         return @reduce(.Or, b <= a)
+//     };
+//     return f;
+// }
 
 /// Filter a slice based on a predicate function, returning a new heap-allocated array
 /// Caller owns the returned memory
@@ -160,9 +163,21 @@ pub fn filterSlice(
 }
 
 
-
-
-
+pub fn filterInside(
+    allocator: std.mem.Allocator,
+    // items: []@Vector(26, u8),
+    items: [][26]u8,
+    target: @Vector(26, u8),
+) ![][26]u8 {
+    var list = std.ArrayList([26]u8).init(allocator);
+    errdefer list.deinit();
+    for (items) |item| {
+        if (@reduce(.Or, item <= target)) {
+            try list.append(item);
+        }
+    }
+    return try list.toOwnedSlice();
+}
 const Node = struct {
     vec: @Vector(26, u8),
     next: ?*Node,
@@ -188,19 +203,22 @@ pub fn printCombinations(
         try printWordsForCurrentCombo(current_combo, wordmap, allocator);
         return;
     }
-    // filtered_combos = filterSlika
+    if (remaining_combos.len == 0) {
+        return;
+    }
     
     for (remaining_combos, 0..) |vec, i| {
         if (@reduce(.Or, vec > target)) {
             continue;
         }
-        
         const remaining = target - vec;
         // const new_combos = filterSlice((, allocator: std.mem.Allocator, items: []const T, pred: fn(T)bool)
         const new_node = try Node.init(vec, current_combo, allocator);
+
+        const filtered_combos = try filterInside(allocator, remaining_combos[i..], target);
         defer allocator.destroy(new_node);
         
-        try printCombinations(remaining, remaining_combos[i..], new_node, wordmap, allocator);
+        try printCombinations(remaining, filtered_combos, new_node, wordmap, allocator);
     }
 }
 
