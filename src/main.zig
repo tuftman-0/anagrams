@@ -1,4 +1,5 @@
 const std = @import("std");
+const stdout = std.io.getStdOut().writer();
 
 // https://stackoverflow.com/a/77053872/8062159
 //
@@ -92,7 +93,7 @@ pub fn filterInside(
     var list = std.ArrayList([26]u8).init(allocator);
     errdefer list.deinit();
     for (items) |item| {
-        if (@reduce(.Or, item <= target)) {
+        if (@reduce(.And, item <= target)) {
             try list.append(item);
         }
     }
@@ -100,10 +101,11 @@ pub fn filterInside(
 }
 
 const Node = struct {
-    vec: @Vector(26, u8),
+    // vec: @Vector(26, u8),
+    vec: [26]u8,
     next: ?*Node,
 
-    pub fn init(vec: @Vector(26, u8), next: ?*Node, allocator: std.mem.Allocator) !*Node {
+    pub fn init(vec: [26]u8, next: ?*Node, allocator: std.mem.Allocator) !*Node {
         const node = try allocator.create(Node);
         node.* = .{ .vec = vec, .next = next };
         return node;
@@ -120,7 +122,7 @@ pub fn printCombinations(
 ) !void {
     const zero_vector: @Vector(26, u8) = @splat(0);
     
-    if (@reduce(.Or, target > zero_vector) == false) {
+    if (@reduce(.And, target == zero_vector)) {
         try printWordsForCurrentCombo(current_combo, wordmap, allocator);
         return;
     }
@@ -128,10 +130,12 @@ pub fn printCombinations(
     for (remaining_combos, 0..) |vec, i| {
         if (@reduce(.Or, vec > target)) {
             continue;
+        } else {
+            // std.debug.print("{any} {any}\n", .{vec, target});
         }
-        const remaining = target - vec;
+        const remaining = target -% vec;
         const new_node = try Node.init(vec, current_combo, allocator);
-        defer allocator.destroy(new_node);
+        errdefer allocator.destroy(new_node);
 
         const filtered_combos = try filterInside(allocator, remaining_combos[i..], remaining);
         defer allocator.free(filtered_combos);
@@ -145,8 +149,6 @@ fn printWordsForCurrentCombo(
     wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
     allocator: std.mem.Allocator,
 ) !void {
-    const stdout = std.io.getStdOut().writer();
-
     if (combo == null) {
         try stdout.writeAll("\n");
         return;
@@ -157,8 +159,11 @@ fn printWordsForCurrentCombo(
     if (wordmap.get(vec_array)) |words| {
         for (words.items) |word| {
             try stdout.print("{s} ", .{word});
+            
             try printWordsForCurrentCombo(combo.?.next, wordmap, allocator);
         }
+    } else {
+        std.debug.print("ERR", .{});
     }
 }
 
