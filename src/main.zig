@@ -84,6 +84,7 @@ pub fn filterSlice(
 }
 
 
+/// Caller owns the returned memory
 pub fn filterInside(
     allocator: std.mem.Allocator,
     // items: []@Vector(26, u8),
@@ -111,6 +112,16 @@ const Node = struct {
         return node;
     }
 };
+
+
+  
+// pub fn reverseList(node: ?*Node, allocator: std.mem.Allocator) ?*Node {
+//     if (node == null) {
+//         return null;
+//     }
+//     const new_tail = Node.init(node.?.vec, null, allocator);
+//     return Node.init(reverseList(node.?.next, allocator), new_tail, allocator);
+// }
 
 pub fn printVec(vec: [26]u8) void {
     const alpha = "abcdefghijklmnopqrstuvwxyz";
@@ -163,9 +174,10 @@ fn printWordsForCurrentCombo(
     }
 
     if (wordmap.get(combo.?.vec)) |words| {
+        const next_combo = combo.?.next;
         for (words.items) |word| {
+            try printWordsForCurrentCombo(next_combo, wordmap, allocator);
             try stdout.print("{s} ", .{word});
-            try printWordsForCurrentCombo(combo.?.next, wordmap, allocator);
         }
     } else {
         std.debug.print("ERR", .{});
@@ -173,6 +185,109 @@ fn printWordsForCurrentCombo(
 }
 
 
+
+// //this is stupid but the main recursive version didn't work so I'm trying this instead
+// fn printWordsForCurrentCombo(
+//     combo: ?*Node,
+//     wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
+//     allocator: std.mem.Allocator,
+// ) !void {
+//     var vec_list = std.ArrayList([26]u8).init(allocator);
+//     var p = combo;
+//     // defer allocator.free(vec_list);
+//     defer vec_list.deinit();
+//     while (p != null) {
+//         try vec_list.append(p.?.vec);
+//         p = p.?.next;
+//     }
+//     const slice = try vec_list.toOwnedSlice();
+//     try cartesianPrint(slice, wordmap);
+    
+// }
+
+// pub fn cartesianPrint(
+//     vec_list: [][26]u8,
+//     wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8))
+// ) !void {
+//     if (vec_list.len == 0) {
+//         try stdout.print("\n", .{});
+//         return;
+//     }
+//     const vec = vec_list[0];
+//     if (wordmap.get(vec)) |words| {
+//         for (words.items) |word| {
+//             try cartesianPrint(vec_list[1..], wordmap);
+//             try stdout.print("{s} ", .{word});
+//         }
+//     }
+// }
+
+// fn printWordsForCurrentCombo(
+//     combo: ?*Node,
+//     wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
+//     allocator: std.mem.Allocator,
+// ) !void {
+//     var word_list = std.ArrayList([]const u8).init(allocator);
+//     defer word_list.deinit();
+    
+//     // First collect all words in the combination
+//     var current = combo;
+//     while (current) |node| {
+//         const vec_array: [26]u8 = node.vec;
+//         if (wordmap.get(vec_array)) |words| {
+//             try word_list.append(words.items[0]);
+//         }
+//         current = node.next;
+//     }
+  
+//     // Print all words in the combination
+//     for (word_list.items) |word| {
+//         try stdout.print("{s} ", .{word});
+//     }
+//     try stdout.writeAll("\n");
+    
+//     // Now generate all variations by trying different words at each position
+//     var depth: usize = 0;
+//     current = combo;
+//     while (current) |node| : ({current = node.next; depth += 1;}) {
+//         const vec_array: [26]u8 = node.vec;
+//         if (wordmap.get(vec_array)) |words| {
+//             const original_word = word_list.items[depth];
+//             for (words.items) |word| {
+//                 if (!std.mem.eql(u8, word, original_word)) {
+//                     word_list.items[depth] = word;
+//                     for (word_list.items) |w| {
+//                         try stdout.print("{s} ", .{w});
+//                     }
+//                     try stdout.writeAll("\n");
+//                 }
+//             }
+//             word_list.items[depth] = original_word;
+//         }
+//     }
+// }
+
+
+fn sumLetterCounts(vec: [26]u8) u32 {
+    var sum: u32 = 0;
+    for (vec) |count| {
+        sum += count;
+    }
+    return sum;
+}
+
+fn sortVectorsBySize(vectors: [][26]u8, allocator: std.mem.Allocator) ![][26]u8 {
+    const sorted = try allocator.dupe([26]u8, vectors);
+    
+    std.sort.block([26]u8, sorted, {}, struct {
+        fn lessThan(_: void, a: [26]u8, b: [26]u8) bool {
+            return sumLetterCounts(b) < sumLetterCounts(a);
+        }
+    }.lessThan);
+    
+    return sorted;
+}
+ 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -235,8 +350,11 @@ pub fn main() !void {
     //         std.debug.print("{any}", .{value});
     //     }
     // }
-       
-    try printCombinations(target_combo, vectors, null, hashmap, allocator);
+
+    const sorted = try sortVectorsBySize(vectors, allocator);
+    defer allocator.free(sorted);
+
+    try printCombinations(target_combo, sorted, null, hashmap, allocator);
 
     // const initial_combo = std.ArrayList(@Vector(26, u8)).init(allocator);
     // const initial_combo: ?*Node = null;
