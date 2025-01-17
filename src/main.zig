@@ -112,6 +112,18 @@ const Node = struct {
     }
 };
 
+pub fn printVec(vec: [26]u8) void {
+    const alpha = "abcdefghijklmnopqrstuvwxyz";
+    for (vec, 0..) |n,i| {
+        if (n != 0) {
+            std.debug.print("{c}{d}" , .{alpha[i], n});
+        }
+        // var x = n;
+        // while (x > 0) : (x -= 1) {
+        //     std.debug.print("{c}" , .{alpha[i]});
+        // }
+    }
+}
 
 pub fn printCombinations(
     target: @Vector(26, u8),
@@ -121,25 +133,20 @@ pub fn printCombinations(
     allocator: std.mem.Allocator,
 ) !void {
     const zero_vector: @Vector(26, u8) = @splat(0);
-    
+
     if (@reduce(.And, target == zero_vector)) {
         try printWordsForCurrentCombo(current_combo, wordmap, allocator);
         return;
     }
-    
+
     for (remaining_combos, 0..) |vec, i| {
-        if (@reduce(.Or, vec > target)) {
-            continue;
-        } else {
-            // std.debug.print("{any} {any}\n", .{vec, target});
-        }
-        const remaining = target -% vec;
+        const remaining = target - vec;
         const new_node = try Node.init(vec, current_combo, allocator);
-        errdefer allocator.destroy(new_node);
+        defer allocator.destroy(new_node);
 
         const filtered_combos = try filterInside(allocator, remaining_combos[i..], remaining);
         defer allocator.free(filtered_combos);
-       
+
         try printCombinations(remaining, filtered_combos, new_node, wordmap, allocator);
     }
 }
@@ -151,15 +158,13 @@ fn printWordsForCurrentCombo(
 ) !void {
     if (combo == null) {
         try stdout.writeAll("\n");
+        // try stdout.print("\n", .{});
         return;
     }
 
-    // Convert vector back to array for hashmap lookup
-    const vec_array: [26]u8 = combo.?.vec;
-    if (wordmap.get(vec_array)) |words| {
+    if (wordmap.get(combo.?.vec)) |words| {
         for (words.items) |word| {
             try stdout.print("{s} ", .{word});
-            
             try printWordsForCurrentCombo(combo.?.next, wordmap, allocator);
         }
     } else {
@@ -223,6 +228,14 @@ pub fn main() !void {
 
 
     const vectors = hashmap.keys();
+    // for (vectors) |key| {
+    //     const vec: @Vector(26, u8) = key;
+    //     if (@reduce(.Or, target_combo < vec)) {
+    //         const value = hashmap.get(key);
+    //         std.debug.print("{any}", .{value});
+    //     }
+    // }
+       
     try printCombinations(target_combo, vectors, null, hashmap, allocator);
 
     // const initial_combo = std.ArrayList(@Vector(26, u8)).init(allocator);
