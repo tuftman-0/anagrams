@@ -4,8 +4,10 @@ const stdout = std.io.getStdOut().writer();
 // const w = bw.writer();
 
 // https://stackoverflow.com/a/77053872/8062159
-//
-pub fn readWordsFromFile(filename: []const u8, allocator: std.mem.Allocator) ![][]const u8 {
+pub fn readWordsFromFile(
+    filename: []const u8,
+    allocator: std.mem.Allocator
+) ![][]const u8 {
     const file = try std.fs.cwd().openFile(filename, .{});
     defer file.close();
     const file_size = try file.getEndPos();
@@ -25,24 +27,30 @@ pub fn readWordsFromFile(filename: []const u8, allocator: std.mem.Allocator) ![]
 
 // words -> combo word pairs -> filtered combo word pairs -> words grouped by combo
 
-pub fn getLetterCounts(word: []const u8) @Vector(26, u8) {
+//returns a vector of counts for each letter in an input word
+pub fn getLetterCounts(
+    word: []const u8
+) @Vector(26, u8) {
     // construct a 26 byte long array to store the number of each letter
     var counts: @Vector(26, u8) = std.mem.zeroes([26]u8);
     for (word) |char| {
         switch (char) {
-            'a'...'z' => { // transform lowercase
-                counts[char - 'a'] += 1;
-            },
-            'A'...'Z' => { // transform uppercase
-                counts[char - 'A'] += 1;
-            },
+            'a'...'z' => { counts[char - 'a'] += 1; }, // transform lowercase
+            'A'...'Z' => { counts[char - 'A'] += 1; }, // transform uppercase
             else => {}, // do nothing
         }
     }
     return counts;
 }
 
-pub fn getFilteredWordComboPairs(target: []const u8, words: [][]const u8, allocator: std.mem.Allocator) ![]ComboPair {
+// filters a set of words based on whether they fit inside a target string
+// returns a slice of word, vector pairs
+// where the vectors represent a particular combination of leters
+pub fn getFilteredWordComboPairs(
+    words: [][]const u8,
+    target: []const u8,
+    allocator: std.mem.Allocator
+) ![]ComboPair {
     const target_counts = getLetterCounts(target);
     var pairs: []ComboPair = try allocator.alloc(ComboPair, words.len);
     // maybe just use arraylist for simplicity
@@ -64,9 +72,6 @@ const ComboPair = struct {
     combo: @Vector(26, u8),
     word: []const u8,
 };
-
-
-
 
 // Filters a list of items based on whether they fit inside the target vector
 // Caller owns the returned memory
@@ -91,18 +96,24 @@ const VecNode = struct {
     val: [26]u8,
     next: ?*VecNode,
 
-    pub fn init(val: [26]u8, next: ?*VecNode, allocator: std.mem.Allocator) !*VecNode {
+    pub fn init(
+        val: [26]u8,
+        next: ?*VecNode,
+        allocator: std.mem.Allocator
+    ) !*VecNode {
         const node = try allocator.create(VecNode);
         node.* = .{ .val = val, .next = next };
         return node;
     }
 };
 
-fn printVec(vec: [26]u8) void {
+fn printVec(
+    vec: [26]u8
+) void {
     const alpha = "abcdefghijklmnopqrstuvwxyz";
-    for (vec, 0..) |n,i| {
+    for (vec, 0..) |n, i| {
         if (n != 0) {
-            std.debug.print("{c}{d}" , .{alpha[i], n});
+            std.debug.print("{c}{d}", .{ alpha[i], n });
         }
         // var x = n;
         // while (x > 0) : (x -= 1) {
@@ -137,12 +148,15 @@ pub fn printAnagrams(
     }
 }
 
-
 const StrNode = struct {
     val: []const u8,
     next: ?*StrNode,
 
-    pub fn init(val: []const u8, next: ?*StrNode, allocator: std.mem.Allocator) !*StrNode {
+    pub fn init(
+        val: []const u8,
+        next: ?*StrNode,
+        allocator: std.mem.Allocator
+    ) !*StrNode {
         const node = try allocator.create(StrNode);
         node.* = .{ .val = val, .next = next };
         return node;
@@ -188,7 +202,10 @@ fn sumLetterCounts(vec: [26]u8) u32 {
     return sum;
 }
 
-fn sortVectorsBySize(vectors: [][26]u8, allocator: std.mem.Allocator) ![][26]u8 {
+fn sortVectorsBySize(
+    vectors: [][26]u8,
+    allocator: std.mem.Allocator
+) ![][26]u8 {
     const sorted = try allocator.dupe([26]u8, vectors);
     std.sort.block([26]u8, sorted, {}, struct {
         fn lessThan(_: void, a: [26]u8, b: [26]u8) bool {
@@ -231,7 +248,7 @@ pub fn main() !void {
     // std.debug.print("{d} words in wordlist\n", .{words.len});
 
     // std.debug.print("{any}: {s}\n", .{ target_combo, target });
-    const pairs = try getFilteredWordComboPairs(target, words, allocator);
+    const pairs = try getFilteredWordComboPairs(words, target, allocator);
     defer allocator.free(pairs);
 
     // build hashmap
@@ -247,43 +264,14 @@ pub fn main() !void {
         }
     }
 
-    // const initial_words = std.ArrayList([]const u8).init(allocator);
-
-    // try printAllCombinations(target_combo, hashmap, initial_words, allocator);
-
-
     const vectors = hashmap.keys();
-    // for (vectors) |key| {
-    //     const vec: @Vector(26, u8) = key;
-    //     if (@reduce(.Or, target_combo < vec)) {
-    //         const value = hashmap.get(key);
-    //         std.debug.print("{any}", .{value});
-    //     }
-    // }
 
     const sorted = try sortVectorsBySize(vectors, allocator);
     defer allocator.free(sorted);
 
     try printAnagrams(target_combo, sorted, null, hashmap, allocator);
     // try bw.flush();
-    // const initial_combo = std.ArrayList(@Vector(26, u8)).init(allocator);
-    // const initial_combo: ?*VecNode = null;
-    // try printAnagrams(target_combo, hashmap, initial_words, initial_combo, allocator);
 
-    // var entries = hashmap.iterator();
-
-    // while (entries.next()) |entry| {
-    //     std.debug.print("{any}: {{ ", .{entry.key_ptr.*});
-    //     defer std.debug.print("}}\n", .{});
-    //     for (entry.value_ptr.*.items) |word| {
-    //         std.debug.print("{s}, ", .{word});
-    //     }
-    // }
-
-    // for (pairs) |pair| {
-    //     // std.debug.print("{any} ", .{combo});
-    //     std.debug.print("{any}: {s}\n", pair);
-    // }
 }
 
 test "read words" {
