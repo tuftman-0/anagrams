@@ -2,6 +2,10 @@ const std = @import("std");
 const stdout = std.io.getStdOut().writer();
 // var bw = std.io.bufferedWriter(stdout);
 // const w = bw.writer();
+// const byfreq = "seiarntolcdupgmhbyfvkwxzjq";
+// for trying different letter orders for checking
+const order: [26]u8 = [_]u8{18, 4, 8, 0, 17, 13, 19, 14, 11, 2, 3, 20, 15, 6, 12, 7, 1, 24, 5, 21, 10, 22, 23, 25, 9, 16};
+// const order: [26]u8 = [_]u8{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25};
 
 // https://stackoverflow.com/a/77053872/8062159
 pub fn readWordsFromFile(
@@ -25,22 +29,40 @@ pub fn readWordsFromFile(
     return words.toOwnedSlice();
 }
 
+pub fn fitsInside(
+    b: [26]u8,
+    a: [26]u8
+) bool {
+    for (b, 0..) |bval, i| {
+        if (a[i] > bval) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // words -> combo word pairs -> filtered combo word pairs -> words grouped by combo
 
 //returns a vector of counts for each letter in an input word
 pub fn getLetterCounts(
     word: []const u8
-) @Vector(26, u8) {
+) [26]u8 {
     // construct a 26 byte long array to store the number of each letter
-    var counts: @Vector(26, u8) = std.mem.zeroes([26]u8);
+    var counts: [26]u8 = std.mem.zeroes([26]u8);
     for (word) |char| {
         switch (char) {
-            'a'...'z' => { counts[char - 'a'] += 1; }, // transform lowercase
-            'A'...'Z' => { counts[char - 'A'] += 1; }, // transform uppercase
-            else => {}, // do nothing
+            'a'...'z' => { counts[order[char - 'a']] += 1; }, // transform lowercase
+            'A'...'Z' => { counts[order[char - 'A']] += 1; }, // transform uppercase
+            else      => {}, // do nothing
         }
     }
     return counts;
+}
+
+pub fn subtract(
+	a: [26]u8,
+	b: [26]u8
+) [26]u8 {
 }
 
 // filters a set of words based on whether they fit inside a target string
@@ -58,7 +80,7 @@ pub fn getFilteredWordComboPairs(
     for (words) |word| {
         const word_counts = getLetterCounts(word);
         // if word doesn't fit inside target then skip it
-        if (@reduce(.Or, word_counts > target_counts)) {
+        if (!fitsInside(target_counts, word_counts)) {
             continue;
         }
         pairs[size] = .{ .combo = word_counts, .word = word };
@@ -69,7 +91,7 @@ pub fn getFilteredWordComboPairs(
 }
 
 const ComboPair = struct {
-    combo: @Vector(26, u8),
+    combo: [26]u8,
     word: []const u8,
 };
 
@@ -77,13 +99,13 @@ const ComboPair = struct {
 // Caller owns the returned memory
 pub fn filterInside(
     items: [][26]u8,
-    target: @Vector(26, u8),
+    target: [26]u8,
     allocator: std.mem.Allocator,
 ) ![][26]u8 {
     var list = std.ArrayList([26]u8).init(allocator);
     errdefer list.deinit();
     for (items) |item| {
-        if (@reduce(.And, item <= target)) {
+        if (fitsInside(target, item)) {
             try list.append(item);
         }
     }
@@ -95,7 +117,6 @@ const VecNode = struct {
     // val: @Vector(26, u8),
     val: [26]u8,
     next: ?*VecNode,
-
     pub fn init(
         val: [26]u8,
         next: ?*VecNode,
@@ -130,8 +151,7 @@ pub fn printAnagrams(
     allocator: std.mem.Allocator,
 ) !void {
     const zero_vector: @Vector(26, u8) = @splat(0);
-
-    if (@reduce(.And, target == zero_vector)) {
+    if (fitsInside(zero_vector, target)) {
         try printSolution(current_combo, wordmap, null, allocator);
         return;
     }
