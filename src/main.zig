@@ -59,11 +59,11 @@ pub fn getLetterCounts(
     return counts;
 }
 
-pub fn subtract(
-	a: [26]u8,
-	b: [26]u8
-) [26]u8 {
-}
+// pub fn subtract(
+// 	a: [26]u8,
+// 	b: [26]u8
+// ) [26]u8 {
+// }
 
 // filters a set of words based on whether they fit inside a target string
 // returns a slice of word, vector pairs
