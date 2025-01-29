@@ -4,7 +4,7 @@ const stdout = std.io.getStdOut().writer();
 // const w = bw.writer();
 // const byfreq = "seiarntolcdupgmhbyfvkwxzjq";
 // for trying different letter orders for checking
-const order: [26]u8 = [_]u8{18, 4, 8, 0, 17, 13, 19, 14, 11, 2, 3, 20, 15, 6, 12, 7, 1, 24, 5, 21, 10, 22, 23, 25, 9, 16};
+// const order: [26]u8 = [_]u8{18, 4, 8, 0, 17, 13, 19, 14, 11, 2, 3, 20, 15, 6, 12, 7, 1, 24, 5, 21, 10, 22, 23, 25, 9, 16};
 // const order: [26]u8 = [_]u8{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25};
 
 // https://stackoverflow.com/a/77053872/8062159
@@ -30,6 +30,23 @@ pub fn readWordsFromFile(
 }
 
 pub fn fitsInside(
+    target: [26]u8,
+    combo: LetterCombo
+) bool {
+    for (0..combo.len) |i| {
+        const pos: u8 = combo.set[i];
+        // if (pos > 25) {
+            // std.debug.print("{any}\n", .{combo.counts});
+            // std.debug.print("{d} {d}\n", .{pos, combo.len});
+        // }
+        if (combo.counts[pos] > target[pos]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+pub fn fitsInsideVec(
     b: [26]u8,
     a: [26]u8
 ) bool {
@@ -51,8 +68,8 @@ pub fn getLetterCounts(
     var counts: [26]u8 = std.mem.zeroes([26]u8);
     for (word) |char| {
         switch (char) {
-            'a'...'z' => { counts[order[char - 'a']] += 1; }, // transform lowercase
-            'A'...'Z' => { counts[order[char - 'A']] += 1; }, // transform uppercase
+            'a'...'z' => { counts[char - 'a'] += 1; }, // transform lowercase
+            'A'...'Z' => { counts[char - 'A'] += 1; }, // transform uppercase
             else      => {}, // do nothing
         }
     }
@@ -80,7 +97,7 @@ pub fn getFilteredWordComboPairs(
     for (words) |word| {
         const word_counts = getLetterCounts(word);
         // if word doesn't fit inside target then skip it
-        if (!fitsInside(target_counts, word_counts)) {
+        if (!fitsInsideVec(target_counts, word_counts)) {
             continue;
         }
         pairs[size] = .{ .combo = word_counts, .word = word };
@@ -98,11 +115,11 @@ const ComboPair = struct {
 // Filters a list of items based on whether they fit inside the target vector
 // Caller owns the returned memory
 pub fn filterInside(
-    items: [][26]u8,
+    items: []LetterCombo,
     target: [26]u8,
     allocator: std.mem.Allocator,
-) ![][26]u8 {
-    var list = std.ArrayList([26]u8).init(allocator);
+) ![]LetterCombo {
+    var list = std.ArrayList(LetterCombo).init(allocator);
     errdefer list.deinit();
     for (items) |item| {
         if (fitsInside(target, item)) {
@@ -143,20 +160,27 @@ fn printVec(
     }
 }
 
+const LetterCombo = struct {
+    counts: [26]u8,
+    set: [26]u8,
+    len: u8,
+};
+
 pub fn printAnagrams(
     target: @Vector(26, u8),
-    remaining_combos: [][26]u8,
+    remaining_combos: []LetterCombo,
     current_combo: ?*VecNode,
     wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
     allocator: std.mem.Allocator,
 ) !void {
     const zero_vector: @Vector(26, u8) = @splat(0);
-    if (fitsInside(zero_vector, target)) {
+    if (fitsInsideVec(zero_vector, target)) {
         try printSolution(current_combo, wordmap, null, allocator);
         return;
     }
 
-    for (remaining_combos, 0..) |vec, i| {
+    for (remaining_combos, 0..) |combo, i| {
+        const vec = combo.counts;
         const remaining = target - vec;
         const new_node = try VecNode.init(vec, current_combo, allocator);
         defer allocator.destroy(new_node);
@@ -287,11 +311,31 @@ pub fn main() !void {
     const vectors = hashmap.keys();
 
     const sorted = try sortVectorsBySize(vectors, allocator);
+    // std.debug.print("{d}\n", .{sorted.len});
     defer allocator.free(sorted);
-
-    try printAnagrams(target_combo, sorted, null, hashmap, allocator);
+    const combos = try allocator.alloc(LetterCombo, sorted.len);
+    // std.debug.print("{d}\n", .{combos.len});
+    defer allocator.free(combos);
+    for (sorted, 0..) |vec, i| {
+        // const i: u8 = @truncate(i_usize);
+        // std.debug.print("{d} {d}\n", .{i_usize, i});
+        // std.debug.print("{any}", .{vec});
+        combos[i].counts = vec;
+        var len: u8 = 0;
+        for (vec, 0..) |count, j_usize| {
+            const j: u8 = @truncate(j_usize);
+            if (count > 0) {
+                // if (j > 25) {
+                //     std.debug.print("{d} {d}\n", .{j_usize, j});
+                // }
+                combos[i].set[len] = j;
+                len += 1;
+            }
+        }
+        combos[i].len = len;
+    }
+    try printAnagrams(target_combo, combos, null, hashmap, allocator);
     // try bw.flush();
-
 }
 
 test "read words" {
