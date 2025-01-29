@@ -6,6 +6,7 @@ const stdout = std.io.getStdOut().writer();
 // for trying different letter orders for checking
 // const order: [26]u8 = [_]u8{18, 4, 8, 0, 17, 13, 19, 14, 11, 2, 3, 20, 15, 6, 12, 7, 1, 24, 5, 21, 10, 22, 23, 25, 9, 16};
 // const order: [26]u8 = [_]u8{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25};
+// var bw: std.io.BufferedWriter(4096, std.fs.File.Writer) = undefined;
 
 // https://stackoverflow.com/a/77053872/8062159
 pub fn readWordsFromFile(
@@ -115,14 +116,14 @@ const ComboPair = struct {
 // Filters a list of items based on whether they fit inside the target vector
 // Caller owns the returned memory
 pub fn filterInside(
-    items: []LetterCombo,
+    items: []*LetterCombo,
     target: [26]u8,
     allocator: std.mem.Allocator,
-) ![]LetterCombo {
-    var list = std.ArrayList(LetterCombo).init(allocator);
+) ![]*LetterCombo {
+    var list = std.ArrayList(*LetterCombo).init(allocator);
     errdefer list.deinit();
     for (items) |item| {
-        if (fitsInside(target, item)) {
+        if (fitsInside(target, item.*)) {
             try list.append(item);
         }
     }
@@ -167,28 +168,30 @@ const LetterCombo = struct {
 };
 
 pub fn printAnagrams(
-    target: @Vector(26, u8),
-    remaining_combos: []LetterCombo,
+    target: *@Vector(26, u8),
+    remaining_combos: []*LetterCombo,
     current_combo: ?*VecNode,
     wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
     allocator: std.mem.Allocator,
 ) !void {
     const zero_vector: @Vector(26, u8) = @splat(0);
-    if (fitsInsideVec(zero_vector, target)) {
+    if (fitsInsideVec(zero_vector, target.*)) {
         try printSolution(current_combo, wordmap, null, allocator);
         return;
     }
 
     for (remaining_combos, 0..) |combo, i| {
         const vec = combo.counts;
-        const remaining = target - vec;
+        // var remaining = target.* - vec;
+        target.* = target.* - vec;
         const new_node = try VecNode.init(vec, current_combo, allocator);
         defer allocator.destroy(new_node);
 
-        const filtered_combos = try filterInside(remaining_combos[i..], remaining, allocator);
+        const filtered_combos = try filterInside(remaining_combos[i..], target.*, allocator);
         defer allocator.free(filtered_combos);
 
-        try printAnagrams(remaining, filtered_combos, new_node, wordmap, allocator);
+        try printAnagrams(target, filtered_combos, new_node, wordmap, allocator);
+        target.* = target.* + vec;
     }
 }
 
@@ -216,6 +219,18 @@ pub fn printList(
         maybe_node = node.next;
     }
 }
+
+
+// pub fn printList(
+//     list: ?*StrNode
+// // ) !void {
+//     var maybe_node = list;
+//     while (maybe_node) |node| {
+//         try bw.writer().print("{s} ", .{node.val});
+//         maybe_node = node.next;
+//     }
+//     try bw.writer().writeByte('\n');
+// }
 
 fn printSolution(
     combo: ?*VecNode,
@@ -262,6 +277,8 @@ fn sortVectorsBySize(
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
+    // bw = std.io.bufferedWriter(std.io.getStdOut().writer());
+    // defer bw.flush() catch unreachable;
 
     // Get command line args
     var args = try std.process.argsWithAllocator(allocator);
@@ -285,7 +302,7 @@ pub fn main() !void {
     }
 
     const target = input;
-    const target_combo = getLetterCounts(target);
+    var target_combo: @Vector(26, u8)  = getLetterCounts(target);
 
     const words = try readWordsFromFile("/home/josh/.local/bin/words.txt", allocator);
     defer allocator.free(words);
@@ -316,6 +333,7 @@ pub fn main() !void {
     const combos = try allocator.alloc(LetterCombo, sorted.len);
     // std.debug.print("{d}\n", .{combos.len});
     defer allocator.free(combos);
+    const pointers = try allocator.alloc(*LetterCombo, sorted.len);
     for (sorted, 0..) |vec, i| {
         // const i: u8 = @truncate(i_usize);
         // std.debug.print("{d} {d}\n", .{i_usize, i});
@@ -333,8 +351,9 @@ pub fn main() !void {
             }
         }
         combos[i].len = len;
+        pointers[i] = &combos[i];
     }
-    try printAnagrams(target_combo, combos, null, hashmap, allocator);
+    try printAnagrams(&target_combo, pointers, null, hashmap, allocator);
     // try bw.flush();
 }
 
