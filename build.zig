@@ -36,6 +36,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // exe.addPackage(.{
+    //     .name = "tracy",
+    //     .source = .{ .path = "path/to/tracy.zig" },
+    // });
+    // exe.linkSystemLibrary("tracy");
+
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
