@@ -83,6 +83,100 @@ pub fn getLetterCounts(
 // ) [26]u8 {
 // }
 
+// Structure to manage our level buffers
+const FilterBuffers = struct {
+    // Array of slices, each slice is a buffer for a level
+    buffers: [][]*LetterCombo,
+    allocator: std.mem.Allocator,
+
+    pub fn init(max_depth: usize, max_width: usize, allocator: std.mem.Allocator) !FilterBuffers {
+        const buffers = try allocator.alloc([]*LetterCombo, max_depth);
+        errdefer allocator.free(buffers);
+
+        // Allocate each level's buffer
+        for (buffers) |*buffer| {
+            buffer.* = try allocator.alloc(*LetterCombo, max_width);
+        }
+
+        return FilterBuffers{
+            .buffers = buffers,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *FilterBuffers) void {
+        // Free each level's buffer
+        for (self.buffers) |buffer| {
+            self.allocator.free(buffer);
+        }
+        // Free the array of buffers
+        self.allocator.free(self.buffers);
+    }
+
+    // Filter items into the buffer at the given depth
+    pub fn filterAtDepth(
+        self: *FilterBuffers,
+        depth: usize,
+        items: []*LetterCombo,
+        target: [26]u8,
+    ) []*LetterCombo {
+        const buffer = self.buffers[depth];
+        var size: usize = 0;
+
+        for (items) |item| {
+            if (fitsInside(target, item.*)) {
+                buffer[size] = item;
+                size += 1;
+            }
+        }
+
+        return buffer[0..size];
+    }
+};
+
+// Modified printAnagrams to use the buffer system
+pub fn printAnagrams(
+    target: *@Vector(26, u8),
+    remaining_combos: []*LetterCombo,
+    current_combo: ?*VecNode,
+    wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
+    allocator: std.mem.Allocator,
+    buffers: *FilterBuffers,
+    depth: usize,
+) !void {
+    const zero_vector: @Vector(26, u8) = @splat(0);
+    if (fitsInsideVec(zero_vector, target.*)) {
+        try printSolution(current_combo, wordmap, null, allocator);
+        return;
+    }
+
+    for (remaining_combos, 0..) |combo, i| {
+        const vec = combo.counts;
+        target.* = target.* - vec;
+        const new_node = try VecNode.init(vec, current_combo, allocator);
+        defer allocator.destroy(new_node);
+
+        // Use our buffer system instead of allocating
+        const filtered_combos = buffers.filterAtDepth(
+            depth,
+            remaining_combos[i..],
+            target.*,
+        );
+
+        try printAnagrams(
+            target,
+            filtered_combos,
+            new_node,
+            wordmap,
+            allocator,
+            buffers,
+            depth + 1,
+        );
+        target.* = target.* + vec;
+    }
+}
+
+
 // filters a set of words based on whether they fit inside a target string
 // returns a slice of word, vector pairs
 // where the vectors represent a particular combination of leters
@@ -167,33 +261,33 @@ const LetterCombo = struct {
     len: u8,
 };
 
-pub fn printAnagrams(
-    target: *@Vector(26, u8),
-    remaining_combos: []*LetterCombo,
-    current_combo: ?*VecNode,
-    wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
-    allocator: std.mem.Allocator,
-) !void {
-    const zero_vector: @Vector(26, u8) = @splat(0);
-    if (fitsInsideVec(zero_vector, target.*)) {
-        try printSolution(current_combo, wordmap, null, allocator);
-        return;
-    }
+// pub fn printAnagrams(
+//     target: *@Vector(26, u8),
+//     remaining_combos: []*LetterCombo,
+//     current_combo: ?*VecNode,
+//     wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
+//     allocator: std.mem.Allocator,
+// ) !void {
+//     const zero_vector: @Vector(26, u8) = @splat(0);
+//     if (fitsInsideVec(zero_vector, target.*)) {
+//         try printSolution(current_combo, wordmap, null, allocator);
+//         return;
+//     }
 
-    for (remaining_combos, 0..) |combo, i| {
-        const vec = combo.counts;
-        // var remaining = target.* - vec;
-        target.* = target.* - vec;
-        const new_node = try VecNode.init(vec, current_combo, allocator);
-        defer allocator.destroy(new_node);
+//     for (remaining_combos, 0..) |combo, i| {
+//         const vec = combo.counts;
+//         // var remaining = target.* - vec;
+//         target.* = target.* - vec;
+//         const new_node = try VecNode.init(vec, current_combo, allocator);
+//         defer allocator.destroy(new_node);
 
-        const filtered_combos = try filterInside(remaining_combos[i..], target.*, allocator);
-        defer allocator.free(filtered_combos);
+//         const filtered_combos = try filterInside(remaining_combos[i..], target.*, allocator);
+//         defer allocator.free(filtered_combos);
 
-        try printAnagrams(target, filtered_combos, new_node, wordmap, allocator);
-        target.* = target.* + vec;
-    }
-}
+//         try printAnagrams(target, filtered_combos, new_node, wordmap, allocator);
+//         target.* = target.* + vec;
+//     }
+// }
 
 const StrNode = struct {
     val: []const u8,
@@ -353,7 +447,20 @@ pub fn main() !void {
         combos[i].len = len;
         pointers[i] = &combos[i];
     }
-    try printAnagrams(&target_combo, pointers, null, hashmap, allocator);
+
+    // try printAnagrams(&target_combo, pointers, null, hashmap, allocator);
+    var buffers = try FilterBuffers.init(target.len, sorted.len, allocator);
+    defer buffers.deinit();
+
+    try printAnagrams(
+        &target_combo,
+        pointers,
+        null,
+        hashmap,
+        allocator,
+        &buffers,
+        0,
+    );
     // try bw.flush();
 }
 
