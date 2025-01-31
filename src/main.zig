@@ -1,142 +1,5 @@
 const std =	@import("std");
 const stdout = std.io.getStdOut().writer();
-// var bw =	std.io.bufferedWriter(stdout);
-// const w = bw.writer();
-// const byfreq	= "seiarntolcdupgmhbyfvkwxzjq";
-// for trying different letter orders for checking
-// const order:	[26]u8 = [_]u8{18, 4, 8, 0,	17,	13,	19,	14,	11,	2, 3, 20, 15, 6, 12, 7,	1, 24, 5, 21, 10, 22, 23, 25, 9, 16};
-// const order:	[26]u8 = [_]u8{0, 1, 2,	3, 4, 5, 6,	7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25};
-// var bw: std.io.BufferedWriter(4096, std.fs.File.Writer) = undefined;
-
-
-
-// struct for holding a word with it's corresponding 26 vector of letter counts
-const ComboPair	= struct {
-	combo: [26]u8,
-	word: []const u8,
-};
-
-// struct that represents the group of words associated with a particular combination of letters
-const WordGroup	= struct {
-	counts:	[26]u8,
-	words: [][]const u8,
-};
-
-// struct used for efficiently computing whether a combination of letters can fit inside a target
-const LetterCombo =	struct {
-	group: WordGroup,
-	set: [26]u8,
-	len: u8,
-};
-
-// is a buffer that holds the current running solution (combination of WordGroups)
-const ComboBuffer =	struct {
-	groups:	[]WordGroup,
-	len: usize,
-	
-	pub fn init(max_depth: usize, allocator: std.mem.Allocator)	!ComboBuffer {
-		const groups = try allocator.alloc(WordGroup, max_depth);
-		return .{
-			.groups	= groups,
-			.len = 0,
-		};
-	}
-
-	pub fn deinit(self:	*ComboBuffer, allocator: std.mem.Allocator)	void {
-		allocator.free(self.groups);
-	}
-
-	pub fn appendGroup(self: *ComboBuffer, group: WordGroup) void {
-		self.groups[self.len] =	group;
-		self.len +=	1;
-	}
-
-	pub fn removeLast(self:	*ComboBuffer) void {
-		self.len -=	1;
-	}
-};
-
-// holds buffers used for filtering the arrays of possible LetterCombo at each level
-const FilterBuffers	= struct {
-	// Array of slices,	each slice is a buffer for a level
-	buffers: [][]*LetterCombo,
-	allocator: std.mem.Allocator,
-
-	pub fn init(max_depth: usize, max_width: usize,	allocator: std.mem.Allocator) !FilterBuffers {
-		const buffers =	try allocator.alloc([]*LetterCombo,	max_depth);
-		errdefer allocator.free(buffers);
-
-		// Allocate each level's buffer
-		for	(buffers) |*buffer|	{
-			buffer.* = try allocator.alloc(*LetterCombo, max_width);
-		}
-
-		return FilterBuffers{
-			.buffers = buffers,
-			.allocator = allocator,
-		};
-	}
-
-	pub fn deinit(self:	*FilterBuffers)	void {
-		// Free each level's buffer
-		for	(self.buffers) |buffer|	{
-			self.allocator.free(buffer);
-		}
-		// Free the array of buffers
-		self.allocator.free(self.buffers);
-	}
-
-	// Filter items into the buffer at the given depth
-	pub fn filterAtDepth(
-		self: *FilterBuffers,
-		depth: usize,
-		items: []*LetterCombo,
-		target:	[26]u8,
-	) []*LetterCombo {
-		const buffer = self.buffers[depth];
-		var size: usize	= 0;
-
-		for	(items)	|item| {
-			if (fitsInside(target, item.*))	{
-				buffer[size] = item;
-				size +=	1;
-			}
-		}
-
-		return buffer[0..size];
-	}
-};
-
-// holds the solution (string) a combination of words
-const SolutionBuffer = struct {
-	bytes: []u8,
-	len: usize,
-	
-	pub fn init(max_bytes: usize, allocator: std.mem.Allocator)	!SolutionBuffer	{
-		const bytes	= try allocator.alloc(u8, max_bytes);
-		return .{
-			.bytes = bytes,
-			.len = 0,
-		};
-	}
-
-	pub fn deinit(self:	*SolutionBuffer, allocator:	std.mem.Allocator) void	{
-		allocator.free(self.bytes);
-	}
-
-	// Add a word plus a space
-	pub fn appendWord(self:	*SolutionBuffer, word: []const u8) void	{
-		@memcpy(self.bytes[self.len..self.len +	word.len], word);
-		self.bytes[self.len	+ word.len]	= ' ';
-		self.len +=	word.len + 1;
-	}
-
-	// Remove last word plus its trailing space
-	pub fn removeLast(self:	*SolutionBuffer, word_len: usize) void {
-		self.len -=	word_len + 1;
-	}
-};
-
 
 // reads words from file
 // https://stackoverflow.com/a/77053872/8062159
@@ -287,6 +150,12 @@ pub fn getLetterCounts(
 }
 
 
+// struct for holding a word with it's corresponding 26 vector of letter counts
+const ComboPair	= struct {
+	combo: [26]u8,
+	word: []const u8,
+};
+
 // filters a set of words based on whether they fit inside a target string
 // returns a slice of word,	vector pairs
 // where the vectors represent a particular combination of leters
@@ -329,6 +198,97 @@ pub fn filterInside(
 	return try list.toOwnedSlice();
 }
 
+// struct that represents the group of words associated with a particular combination of letters
+const WordGroup	= struct {
+	counts:	[26]u8,
+	words: [][]const u8,
+};
+
+// struct used for efficiently computing whether a combination of letters can fit inside a target
+const LetterCombo =	struct {
+	group: WordGroup,
+	set: [26]u8,
+	len: u8,
+};
+
+// is a buffer that holds the current running solution (combination of WordGroups)
+const ComboBuffer =	struct {
+	groups:	[]WordGroup,
+	len: usize,
+	
+	pub fn init(max_depth: usize, allocator: std.mem.Allocator)	!ComboBuffer {
+		const groups = try allocator.alloc(WordGroup, max_depth);
+		return .{
+			.groups	= groups,
+			.len = 0,
+		};
+	}
+
+	pub fn deinit(self:	*ComboBuffer, allocator: std.mem.Allocator)	void {
+		allocator.free(self.groups);
+	}
+
+	pub fn appendGroup(self: *ComboBuffer, group: WordGroup) void {
+		self.groups[self.len] =	group;
+		self.len +=	1;
+	}
+
+	pub fn removeLast(self:	*ComboBuffer) void {
+		self.len -=	1;
+	}
+};
+
+// holds buffers used for filtering the arrays of possible LetterCombo at each level
+const FilterBuffers	= struct {
+	// Array of slices,	each slice is a buffer for a level
+	buffers: [][]*LetterCombo,
+	allocator: std.mem.Allocator,
+
+	pub fn init(max_depth: usize, max_width: usize,	allocator: std.mem.Allocator) !FilterBuffers {
+		const buffers =	try allocator.alloc([]*LetterCombo,	max_depth);
+		errdefer allocator.free(buffers);
+
+		// Allocate each level's buffer
+		for	(buffers) |*buffer|	{
+			buffer.* = try allocator.alloc(*LetterCombo, max_width);
+		}
+
+		return FilterBuffers{
+			.buffers = buffers,
+			.allocator = allocator,
+		};
+	}
+
+	pub fn deinit(self:	*FilterBuffers)	void {
+		// Free each level's buffer
+		for	(self.buffers) |buffer|	{
+			self.allocator.free(buffer);
+		}
+		// Free the array of buffers
+		self.allocator.free(self.buffers);
+	}
+
+	// Filter items into the buffer at the given depth
+	pub fn filterAtDepth(
+		self: *FilterBuffers,
+		depth: usize,
+		items: []*LetterCombo,
+		target:	[26]u8,
+	) []*LetterCombo {
+		const buffer = self.buffers[depth];
+		var size: usize	= 0;
+
+		for	(items)	|item| {
+			if (fitsInside(target, item.*))	{
+				buffer[size] = item;
+				size +=	1;
+			}
+		}
+
+		return buffer[0..size];
+	}
+};
+
 // prints all the extended anagrams of a particular combination of characters 
 pub fn printAnagrams(
 	target:	*@Vector(26, u8),
@@ -369,6 +329,36 @@ pub fn printAnagrams(
 		target.* = target.*	+ combo.group.counts;
 	}
 }
+
+// holds the solution (string) a combination of words
+const SolutionBuffer = struct {
+	bytes: []u8,
+	len: usize,
+	
+	pub fn init(max_bytes: usize, allocator: std.mem.Allocator)	!SolutionBuffer	{
+		const bytes	= try allocator.alloc(u8, max_bytes);
+		return .{
+			.bytes = bytes,
+			.len = 0,
+		};
+	}
+
+	pub fn deinit(self:	*SolutionBuffer, allocator:	std.mem.Allocator) void	{
+		allocator.free(self.bytes);
+	}
+
+	// Add a word plus a space
+	pub fn appendWord(self:	*SolutionBuffer, word: []const u8) void	{
+		@memcpy(self.bytes[self.len..self.len +	word.len], word);
+		self.bytes[self.len	+ word.len]	= ' ';
+		self.len +=	word.len + 1;
+	}
+
+	// Remove last word plus its trailing space
+	pub fn removeLast(self:	*SolutionBuffer, word_len: usize) void {
+		self.len -=	word_len + 1;
+	}
+};
 
 // prints all the combinations of words associated with a particular combination of WordGroups
 pub fn printSolution(
