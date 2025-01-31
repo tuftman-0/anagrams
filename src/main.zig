@@ -8,82 +8,60 @@ const stdout = std.io.getStdOut().writer();
 // const order: [26]u8 = [_]u8{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25};
 // var bw: std.io.BufferedWriter(4096, std.fs.File.Writer) = undefined;
 
-// https://stackoverflow.com/a/77053872/8062159
-pub fn readWordsFromFile(
-    filename: []const u8,
-    allocator: std.mem.Allocator
-) ![][]const u8 {
-    const file = try std.fs.cwd().openFile(filename, .{});
-    defer file.close();
-    const file_size = try file.getEndPos();
-    const buffer = try allocator.alloc(u8, file_size);
-    // defer allocator.free(buffer); // breaks everything because it frees too early
-    _ = try file.readAll(buffer);
-    var lines = std.mem.splitSequence(u8, buffer, "\n");
-    var words = std.ArrayList([]const u8).init(allocator);
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trimRight(u8, line, " \r");
-        if (trimmed.len > 0) {
-            try words.append(trimmed);
-        }
-    }
-    return words.toOwnedSlice();
-}
-
-pub fn fitsInside(
-    target: [26]u8,
-    combo: LetterCombo
-) bool {
-    for (0..combo.len) |i| {
-        const pos: u8 = combo.set[i];
-        // if (pos > 25) {
-            // std.debug.print("{any}\n", .{combo.counts});
-            // std.debug.print("{d} {d}\n", .{pos, combo.len});
-        // }
-        if (combo.counts[pos] > target[pos]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-pub fn fitsInsideVec(
-    b: [26]u8,
-    a: [26]u8
-) bool {
-    for (b, 0..) |bval, i| {
-        if (a[i] > bval) {
-            return false;
-        }
-    }
-    return true;
-}
-
-// words -> combo word pairs -> filtered combo word pairs -> words grouped by combo
-
-//returns a vector of counts for each letter in an input word
-pub fn getLetterCounts(
-    word: []const u8
-) [26]u8 {
-    // construct a 26 byte long array to store the number of each letter
-    var counts: [26]u8 = std.mem.zeroes([26]u8);
-    for (word) |char| {
-        switch (char) {
-            'a'...'z' => { counts[char - 'a'] += 1; }, // transform lowercase
-            'A'...'Z' => { counts[char - 'A'] += 1; }, // transform uppercase
-            else      => {}, // do nothing
-        }
-    }
-    return counts;
-}
-
-// pub fn subtract(
-// 	a: [26]u8,
-// 	b: [26]u8
-// ) [26]u8 {
-// }
 
 // Structure to manage our level buffers
+
+
+const ComboPair = struct {
+    combo: [26]u8,
+    word: []const u8,
+};
+
+
+// const WordGroup = struct {
+//     counts: [26]u8,
+//     words: [][]const u8,
+// };
+
+// const LetterCombo = struct {
+//     group: WordGroup,
+//     set: [26]u8,
+//     len: u8,
+// };
+
+const LetterCombo = struct {
+    counts: [26]u8,
+    set: [26]u8,
+    len: u8,
+};
+
+const VecBuffer = struct {
+    vecs: [][26]u8,
+    len: usize,
+    
+    pub fn init(max_depth: usize, allocator: std.mem.Allocator) !VecBuffer {
+        const vecs = try allocator.alloc([26]u8, max_depth);
+        return .{
+            .vecs = vecs,
+            .len = 0,
+        };
+    }
+
+    pub fn deinit(self: *VecBuffer, allocator: std.mem.Allocator) void {
+        allocator.free(self.vecs);
+    }
+
+    pub fn appendVec(self: *VecBuffer, vec: [26]u8) void {
+        self.vecs[self.len] = vec;
+        self.len += 1;
+    }
+
+    pub fn removeLast(self: *VecBuffer) void {
+        self.len -= 1;
+    }
+};
+
+
 const FilterBuffers = struct {
     // Array of slices, each slice is a buffer for a level
     buffers: [][]*LetterCombo,
@@ -134,46 +112,98 @@ const FilterBuffers = struct {
     }
 };
 
-// Modified printAnagrams to use the buffer system
-pub fn printAnagrams(
-    target: *@Vector(26, u8),
-    remaining_combos: []*LetterCombo,
-    current_combo: ?*VecNode,
-    wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
-    allocator: std.mem.Allocator,
-    buffers: *FilterBuffers,
-    depth: usize,
-) !void {
-    const zero_vector: @Vector(26, u8) = @splat(0);
-    if (fitsInsideVec(zero_vector, target.*)) {
-        try printSolution(current_combo, wordmap, null, allocator);
-        return;
+const SolutionBuffer = struct {
+    bytes: []u8,
+    len: usize,
+    
+    pub fn init(max_bytes: usize, allocator: std.mem.Allocator) !SolutionBuffer {
+        const bytes = try allocator.alloc(u8, max_bytes);
+        return .{
+            .bytes = bytes,
+            .len = 0,
+        };
     }
 
-    for (remaining_combos, 0..) |combo, i| {
-        const vec = combo.counts;
-        target.* = target.* - vec;
-        const new_node = try VecNode.init(vec, current_combo, allocator);
-        defer allocator.destroy(new_node);
-
-        // Use our buffer system instead of allocating
-        const filtered_combos = buffers.filterAtDepth(
-            depth,
-            remaining_combos[i..],
-            target.*,
-        );
-
-        try printAnagrams(
-            target,
-            filtered_combos,
-            new_node,
-            wordmap,
-            allocator,
-            buffers,
-            depth + 1,
-        );
-        target.* = target.* + vec;
+    pub fn deinit(self: *SolutionBuffer, allocator: std.mem.Allocator) void {
+        allocator.free(self.bytes);
     }
+
+    // Add a word plus a space
+    pub fn appendWord(self: *SolutionBuffer, word: []const u8) void {
+        @memcpy(self.bytes[self.len..self.len + word.len], word);
+        self.bytes[self.len + word.len] = ' ';
+        self.len += word.len + 1;
+    }
+
+    // Remove last word plus its trailing space
+    pub fn removeLast(self: *SolutionBuffer, word_len: usize) void {
+        self.len -= word_len + 1;
+    }
+};
+
+// https://stackoverflow.com/a/77053872/8062159
+pub fn readWordsFromFile(
+    filename: []const u8,
+    allocator: std.mem.Allocator
+) ![][]const u8 {
+    const file = try std.fs.cwd().openFile(filename, .{});
+    defer file.close();
+    const file_size = try file.getEndPos();
+    const buffer = try allocator.alloc(u8, file_size);
+    // defer allocator.free(buffer); // breaks everything because it frees too early
+    _ = try file.readAll(buffer);
+    var lines = std.mem.splitSequence(u8, buffer, "\n");
+    var words = std.ArrayList([]const u8).init(allocator);
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trimRight(u8, line, " \r");
+        if (trimmed.len > 0) {
+            try words.append(trimmed);
+        }
+    }
+    return words.toOwnedSlice();
+}
+
+pub fn fitsInside(
+    target: [26]u8,
+    combo: LetterCombo
+) bool {
+    for (0..combo.len) |i| {
+        const pos: u8 = combo.set[i];
+        if (combo.counts[pos] > target[pos]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+pub fn fitsInsideVec(
+    b: [26]u8,
+    a: [26]u8
+) bool {
+    for (b, 0..) |bval, i| {
+        if (a[i] > bval) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// words -> combo word pairs -> filtered combo word pairs -> words grouped by combo
+
+//returns a vector of counts for each letter in an input word
+pub fn getLetterCounts(
+    word: []const u8
+) [26]u8 {
+    // construct a 26 byte long array to store the number of each letter
+    var counts: [26]u8 = std.mem.zeroes([26]u8);
+    for (word) |char| {
+        switch (char) {
+            'a'...'z' => { counts[char - 'a'] += 1; }, // transform lowercase
+            'A'...'Z' => { counts[char - 'A'] += 1; }, // transform uppercase
+            else      => {}, // do nothing
+        }
+    }
+    return counts;
 }
 
 
@@ -202,11 +232,6 @@ pub fn getFilteredWordComboPairs(
     return pairs[0..size];
 }
 
-const ComboPair = struct {
-    combo: [26]u8,
-    word: []const u8,
-};
-
 // Filters a list of items based on whether they fit inside the target vector
 // Caller owns the returned memory
 pub fn filterInside(
@@ -224,128 +249,80 @@ pub fn filterInside(
     return try list.toOwnedSlice();
 }
 
-// basic node structure for storing nodes
-const VecNode = struct {
-    // val: @Vector(26, u8),
-    val: [26]u8,
-    next: ?*VecNode,
-    pub fn init(
-        val: [26]u8,
-        next: ?*VecNode,
-        allocator: std.mem.Allocator
-    ) !*VecNode {
-        const node = try allocator.create(VecNode);
-        node.* = .{ .val = val, .next = next };
-        return node;
-    }
-};
 
-fn printVec(
-    vec: [26]u8
-) void {
-    const alpha = "abcdefghijklmnopqrstuvwxyz";
-    for (vec, 0..) |n, i| {
-        if (n != 0) {
-            std.debug.print("{c}{d}", .{ alpha[i], n });
-        }
-        // var x = n;
-        // while (x > 0) : (x -= 1) {
-        //     std.debug.print("{c}" , .{alpha[i]});
-        // }
-    }
-}
-
-const LetterCombo = struct {
-    counts: [26]u8,
-    set: [26]u8,
-    len: u8,
-};
-
-// pub fn printAnagrams(
-//     target: *@Vector(26, u8),
-//     remaining_combos: []*LetterCombo,
-//     current_combo: ?*VecNode,
-//     wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
-//     allocator: std.mem.Allocator,
-// ) !void {
-//     const zero_vector: @Vector(26, u8) = @splat(0);
-//     if (fitsInsideVec(zero_vector, target.*)) {
-//         try printSolution(current_combo, wordmap, null, allocator);
-//         return;
-//     }
-
-//     for (remaining_combos, 0..) |combo, i| {
-//         const vec = combo.counts;
-//         // var remaining = target.* - vec;
-//         target.* = target.* - vec;
-//         const new_node = try VecNode.init(vec, current_combo, allocator);
-//         defer allocator.destroy(new_node);
-
-//         const filtered_combos = try filterInside(remaining_combos[i..], target.*, allocator);
-//         defer allocator.free(filtered_combos);
-
-//         try printAnagrams(target, filtered_combos, new_node, wordmap, allocator);
-//         target.* = target.* + vec;
-//     }
-// }
-
-const StrNode = struct {
-    val: []const u8,
-    next: ?*StrNode,
-
-    pub fn init(
-        val: []const u8,
-        next: ?*StrNode,
-        allocator: std.mem.Allocator
-    ) !*StrNode {
-        const node = try allocator.create(StrNode);
-        node.* = .{ .val = val, .next = next };
-        return node;
-    }
-};
-
-pub fn printList(
-    list: ?*StrNode
-) !void {
-    var maybe_node = list;
-    while (maybe_node) |node| {
-        try stdout.print("{s} ", .{node.val});
-        maybe_node = node.next;
-    }
-}
-
-
-// pub fn printList(
-//     list: ?*StrNode
-// // ) !void {
-//     var maybe_node = list;
-//     while (maybe_node) |node| {
-//         try bw.writer().print("{s} ", .{node.val});
-//         maybe_node = node.next;
-//     }
-//     try bw.writer().writeByte('\n');
-// }
-
-fn printSolution(
-    combo: ?*VecNode,
+pub fn printAnagrams(
+    target: *@Vector(26, u8),
+    remaining_combos: []*LetterCombo,
     wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
-    path: ?*StrNode,
-    allocator: std.mem.Allocator,
+    vec_buffer: *VecBuffer,
+    filter_buffers: *FilterBuffers,
+    solution_buffer: *SolutionBuffer,
+    depth: usize,
 ) !void {
-    if (combo == null) {
-        try printList(path);
-        try stdout.print("\n", .{});
+    const zero_vector: @Vector(26, u8) = @splat(0);
+    if (fitsInsideVec(zero_vector, target.*)) {
+        try printSolution(vec_buffer, wordmap, solution_buffer);
         return;
     }
-    if (wordmap.get(combo.?.val)) |words| {
-        const next_combo = combo.?.next;
+
+    for (remaining_combos, 0..) |combo, i| {
+        const vec = combo.counts;
+        target.* = target.* - vec;
+        
+        // Add vector to buffer instead of creating VecNode
+        vec_buffer.appendVec(vec);
+
+        const filtered_combos = filter_buffers.filterAtDepth(
+            depth,
+            remaining_combos[i..],
+            target.*,
+        );
+
+        try printAnagrams(
+            target,
+            filtered_combos,
+            wordmap,
+            vec_buffer,
+            filter_buffers,
+            solution_buffer,
+            depth + 1,
+        );
+        
+        // Remove vector from buffer
+        vec_buffer.removeLast();
+        target.* = target.* + vec;
+    }
+}
+
+pub fn printSolution(
+    vec_buffer: *const VecBuffer,
+    wordmap: std.AutoArrayHashMap([26]u8, std.ArrayList([]const u8)),
+    solution_buffer: *SolutionBuffer,
+) !void {
+    if (vec_buffer.len == 0) {
+        if (solution_buffer.len > 0) {
+            try stdout.writeAll(solution_buffer.bytes[0 .. solution_buffer.len - 1]);
+            try stdout.writeByte('\n');
+        }
+        return;
+    }
+
+    // Get the first vector
+    const vec = vec_buffer.vecs[0];
+    if (wordmap.get(vec)) |words| {
         for (words.items) |word| {
-            const new_path = try StrNode.init(word, path, allocator);
-            defer allocator.destroy(new_path);
-            try printSolution(next_combo, wordmap, new_path, allocator);
+            solution_buffer.appendWord(word);
+            // Recursively print rest of solution with remaining vectors
+            var next_buffer = VecBuffer{
+                .vecs = vec_buffer.vecs[1..],
+                .len = vec_buffer.len - 1,
+            };
+            try printSolution(&next_buffer, wordmap, solution_buffer);
+            solution_buffer.removeLast(word.len);
         }
     }
 }
+
 
 fn sumLetterCounts(vec: [26]u8) u32 {
     var sum: u32 = 0;
@@ -448,17 +425,22 @@ pub fn main() !void {
         pointers[i] = &combos[i];
     }
 
-    // try printAnagrams(&target_combo, pointers, null, hashmap, allocator);
-    var buffers = try FilterBuffers.init(target.len, sorted.len, allocator);
-    defer buffers.deinit();
+    var vec_buffer = try VecBuffer.init(target.len, allocator);
+    defer vec_buffer.deinit(allocator);
+
+    var filter_buffers = try FilterBuffers.init(target.len, sorted.len, allocator);
+    defer filter_buffers.deinit();
+
+    var solution_buffer = try SolutionBuffer.init(target.len * 2, allocator);
+    defer solution_buffer.deinit(allocator);
 
     try printAnagrams(
         &target_combo,
         pointers,
-        null,
         hashmap,
-        allocator,
-        &buffers,
+        &vec_buffer,
+        &filter_buffers,
+        &solution_buffer,
         0,
     );
     // try bw.flush();
