@@ -11,18 +11,94 @@ pub fn readWordsFromFile(
 	defer file.close();
 	const file_size	= try file.getEndPos();
 	const buffer = try allocator.alloc(u8, file_size);
-	// defer allocator.free(buffer); //	breaks everything because it frees too early
+	// const buffer: [1000]u8 = std.mem.zeroes([1000]u8);
 	_ =	try file.readAll(buffer);
 	var lines =	std.mem.splitSequence(u8, buffer, "\n");
 	var words =	std.ArrayList([]const u8).init(allocator);
 	while (lines.next()) |line|	{
-		const trimmed =	std.mem.trimRight(u8, line,	" \r");
-		if (trimmed.len	> 0) {
-			try words.append(trimmed);
+		// const trimmed =	std.mem.trimRight(u8, line,	" \r");
+		if (line.len > 0) {
+			try words.append(line);
 		}
 	}
 	return words.toOwnedSlice();
 }
+
+// filters a set of words based on whether they fit inside a target string
+// returns a slice of word,	vector pairs
+// where the vectors represent a particular combination of leters
+pub fn getFilteredWordComboPairs(
+	words: [][]const u8,
+	target:	[]const u8,
+	allocator: std.mem.Allocator
+) ![]ComboPair {
+	const target_counts	= getLetterCounts(target);
+	var pairs: []ComboPair = try allocator.alloc(ComboPair,	words.len);
+	// maybe just use arraylist for simplicity
+	var size: usize	= 0;
+	for	(words)	|word| {
+		const word_counts =	getLetterCounts(word);
+		// if word doesn't fit inside target then skip it
+		if (!fitsInsideVec(target_counts, word_counts))	{
+			continue;
+		}
+		pairs[size]	= .{ .combo	= word_counts, .word = word	};
+		size +=	1;
+	}
+	_ =	allocator.resize(pairs,	size);
+	return pairs[0..size];
+}
+
+
+// struct for holding a word with it's corresponding 26 vector of letter counts
+const ComboPair	= struct {
+	combo: [26]u8,
+	word: []const u8,
+};
+
+// faster because we don't create intermediate words buffer, we just directly create filtered ComboPairs
+pub fn filterPairsFromFile(
+	filename: []const u8,
+	target: @Vector(26, u8),
+	allocator: std.mem.Allocator
+) ![]ComboPair 	{
+	const file = try std.fs.cwd().openFile(filename, .{});
+	defer file.close();
+	const file_size	= try file.getEndPos();
+	const buffer = try allocator.alloc(u8, file_size);
+	// const buffer: [1000]u8 = std.mem.zeroes([1000]u8);
+	_ =	try file.readAll(buffer);
+	var lines =	std.mem.splitSequence(u8, buffer, "\n");
+	var pairs =	std.ArrayList(ComboPair).init(allocator);
+	while (lines.next()) |word|	{
+		if (word.len > 0) {
+    		const word_counts =	getLetterCounts(word);
+    		if (fitsInsideVec(target, word_counts)) {
+                const pair: ComboPair = .{ .combo	= word_counts, .word = word	};
+                try pairs.append(pair);
+    		}
+		}
+	}
+	return pairs.toOwnedSlice();
+}
+
+
+//returns a vector of counts for each letter in an input word
+pub fn getLetterCounts(
+	word: []const u8
+) [26]u8 {
+	// construct a 26 byte long array to store the number of each letter
+	var counts:	[26]u8 = std.mem.zeroes([26]u8);
+	for	(word) |char| {
+		switch (char) {
+			'a'...'z' => { counts[char - 'a'] += 1;	}, // transform lowercase
+			'A'...'Z' => { counts[char - 'A'] += 1;	}, // transform uppercase
+			else	  => {}, //	do nothing
+		}
+	}
+	return counts;
+}
+
 
 pub fn fitsInside(
 	target:	[26]u8,
@@ -36,7 +112,6 @@ pub fn fitsInside(
 	}
 	return true;
 }
-
 
 // // alternate that uses vectors (kinda makes sets irrelevant) seems about the same performance as the regular fits inside
 // pub fn fitsInside(
@@ -133,53 +208,7 @@ fn buildCombos(
 
 // words ->	combo word pairs ->	filtered combo word pairs -> words grouped by combo
 
-//returns a vector of counts for each letter in an input word
-pub fn getLetterCounts(
-	word: []const u8
-) [26]u8 {
-	// construct a 26 byte long array to store the number of each letter
-	var counts:	[26]u8 = std.mem.zeroes([26]u8);
-	for	(word) |char| {
-		switch (char) {
-			'a'...'z' => { counts[char - 'a'] += 1;	}, // transform lowercase
-			'A'...'Z' => { counts[char - 'A'] += 1;	}, // transform uppercase
-			else	  => {}, //	do nothing
-		}
-	}
-	return counts;
-}
 
-
-// struct for holding a word with it's corresponding 26 vector of letter counts
-const ComboPair	= struct {
-	combo: [26]u8,
-	word: []const u8,
-};
-
-// filters a set of words based on whether they fit inside a target string
-// returns a slice of word,	vector pairs
-// where the vectors represent a particular combination of leters
-pub fn getFilteredWordComboPairs(
-	words: [][]const u8,
-	target:	[]const u8,
-	allocator: std.mem.Allocator
-) ![]ComboPair {
-	const target_counts	= getLetterCounts(target);
-	var pairs: []ComboPair = try allocator.alloc(ComboPair,	words.len);
-	// maybe just use arraylist for simplicity
-	var size: usize	= 0;
-	for	(words)	|word| {
-		const word_counts =	getLetterCounts(word);
-		// if word doesn't fit inside target then skip it
-		if (!fitsInsideVec(target_counts, word_counts))	{
-			continue;
-		}
-		pairs[size]	= .{ .combo	= word_counts, .word = word	};
-		size +=	1;
-	}
-	_ =	allocator.resize(pairs,	size);
-	return pairs[0..size];
-}
 
 // Filters a list of items based on whether they fit inside the target vector
 // Caller owns the returned memory
@@ -423,13 +452,15 @@ pub fn main() !void	{
 	const target = input;
 	var target_combo: @Vector(26, u8)  = getLetterCounts(target);
 
-	const words	= try readWordsFromFile("/home/josh/.local/bin/words.txt", allocator);
-	defer allocator.free(words);
-	// std.debug.print("{d}	words in wordlist\n", .{words.len});
+	// const words	= try readWordsFromFile("/home/josh/.local/bin/words.txt", allocator);
+	// const words	= try filterPairsFromFile("/home/josh/.local/bin/words.txt", target_combo, allocator);
+	// defer allocator.free(words);
+	// if (words.len == 0) return;
 
-	// std.debug.print("{any}: {s}\n", .{ target_combo,	target });
-	const pairs	= try getFilteredWordComboPairs(words, target, allocator);
+	// const pairs	= try getFilteredWordComboPairs(words, target, allocator);
+	const pairs = try filterPairsFromFile("/home/josh/.local/bin/words.txt", target_combo, allocator);
 	defer allocator.free(pairs);
+	if (pairs.len == 0) return;
 
 	const combos = try buildCombos(pairs, allocator);
 	defer {
@@ -470,12 +501,12 @@ pub fn main() !void	{
 	// try bw.flush();
 }
 
-test "read words" {
-	const allocator	= std.heap.page_allocator;
-	const words	= try readWordsFromFile("/home/josh/.local/bin/words.txt", allocator);
-	defer allocator.free(words);
-	for	(words)	|word| {
-		std.debug.print("{s} ",	.{word});
-	}
-	std.debug.print("\n{d}\n", .{words.len});
-}
+// test "read words" {
+// 	const allocator	= std.heap.page_allocator;
+// 	const words	= try readWordsFromFile("/home/josh/.local/bin/words.txt", allocator);
+// 	defer allocator.free(words);
+// 	for	(words)	|word| {
+// 		std.debug.print("{s} ",	.{word});
+// 	}
+// 	std.debug.print("\n{d}\n", .{words.len});
+// }
