@@ -24,28 +24,8 @@ pub fn getLetterCounts(
 }
 
 
-pub fn fitsInside(
-	target:	[26]u8,
-	combo: LetterCombo
-) bool {
-	for	(0..combo.len) |i| {
-		const pos: u8 =	combo.set[i];
-		if (combo.group.counts[pos] > target[pos]) {
-			return false;
-		}
-	}
-	return true;
-}
-
-// // alternate that uses vectors (kinda makes sets irrelevant) seems about the same performance as the regular fits inside
-// pub fn fitsInside(
-// 	target:	@Vector(26,u8),
-// 	combo: LetterCombo
-// ) bool {
-// 	return @reduce(.And, combo.group.counts <= target);
-// }
-
-
+// checks if vector a can fit inside vector b
+// used for checking if a WordGroup can fit inside a target
 pub fn fitsInsideVec(
 	b: @Vector(26,u8),
 	a: @Vector(26,u8),
@@ -63,68 +43,46 @@ fn vectorCompare(a:	[26]u8,	b: [26]u8) bool	{
 fn buildCombos(
 	pairs: []ComboPair,
 	allocator: std.mem.Allocator,
-) ![]LetterCombo {
+) ![]WordGroup {
 	// First sort by vectors
-	std.sort.block(ComboPair, pairs, {}, struct	{
-		fn lessThan(_: void, a:	ComboPair, b: ComboPair) bool {
+	std.sort.block(ComboPair, pairs, {}, struct {
+		fn lessThan(_: void, a: ComboPair, b: ComboPair) bool {
 			return vectorCompare(a.combo, b.combo);
 		}
 	}.lessThan);
 
 	// Now group them
-	var combos = std.ArrayList(LetterCombo).init(allocator);
-	var words =	std.ArrayList([]const u8).init(allocator);
+	var combos = std.ArrayList(WordGroup).init(allocator);
+	var words = std.ArrayList([]const u8).init(allocator);
 	errdefer words.deinit();
 	errdefer combos.deinit();
 
-	var current_vec	= pairs[0].combo;
+	var current_vec = pairs[0].combo;
 	try words.append(pairs[0].word);
 
-	for	(pairs[1..]) |pair|	{
-		if (std.mem.eql(u8,	&current_vec, &pair.combo))	{
+	for (pairs[1..]) |pair| {
+		if (std.mem.eql(u8, &current_vec, &pair.combo)) {
 			try words.append(pair.word);
 		} else {
 			// Create combo for previous group
-			var combo =	LetterCombo{
-				.group = .{
-					.counts	= current_vec,
-					.words = try words.toOwnedSlice(),
-				},
-				.set = undefined,
-				.len = 0,
+			const combo = WordGroup{
+				.counts = current_vec,
+				.words = try words.toOwnedSlice(),
 			};
-			
-			// Build set for efficient checking
-			for	(current_vec, 0..) |count, i| {
-				if (count >	0) {
-					combo.set[combo.len] = @intCast(i);
-					combo.len += 1;
-				}
-			}
 			
 			try combos.append(combo);
 
 			// Start new group
-			current_vec	= pair.combo;
+			current_vec = pair.combo;
 			try words.append(pair.word);
 		}
 	}
 
 	// Don't forget last group
-	var combo =	LetterCombo{
-		.group = .{
-			.counts	= current_vec,
-			.words = try words.toOwnedSlice(),
-		},
-		.set = undefined,
-		.len = 0,
+	const combo = WordGroup{
+		.counts = current_vec,
+		.words = try words.toOwnedSlice(),
 	};
-	for	(current_vec, 0..) |count, i| {
-		if (count >	0) {
-			combo.set[combo.len] = @intCast(i);
-			combo.len += 1;
-		}
-	}
 	try combos.append(combo);
 
 	return try combos.toOwnedSlice();
@@ -132,36 +90,10 @@ fn buildCombos(
 
 // words ->	combo word pairs ->	filtered combo word pairs -> words grouped by combo
 
-
-
-// Filters a list of items based on whether they fit inside the target vector
-// Caller owns the returned memory
-pub fn filterInside(
-	items: []*LetterCombo,
-	target:	[26]u8,
-	allocator: std.mem.Allocator,
-) ![]*LetterCombo {
-	var list = std.ArrayList(*LetterCombo).init(allocator);
-	errdefer list.deinit();
-	for	(items)	|item| {
-		if (fitsInside(target, item.*))	{
-			try list.append(item);
-		}
-	}
-	return try list.toOwnedSlice();
-}
-
 // struct that represents the group of words associated with a particular combination of letters
 const WordGroup	= struct {
 	counts:	[26]u8,
 	words: [][]const u8,
-};
-
-// struct used for efficiently computing whether a combination of letters can fit inside a target
-const LetterCombo =	struct {
-	group: WordGroup,
-	set: [26]u8,
-	len: u8,
 };
 
 // is a buffer that holds the current running solution (combination of WordGroups)
@@ -191,19 +123,19 @@ const ComboBuffer =	struct {
 	}
 };
 
-// holds buffers used for filtering the arrays of possible LetterCombo at each level
+// holds buffers used for filtering the arrays of possible WordGroup at each level
 const FilterBuffers	= struct {
 	// Array of slices,	each slice is a buffer for a level
-	buffers: [][]*LetterCombo,
+	buffers: [][]*WordGroup,
 	allocator: std.mem.Allocator,
 
 	pub fn init(max_depth: usize, max_width: usize,	allocator: std.mem.Allocator) !FilterBuffers {
-		const buffers =	try allocator.alloc([]*LetterCombo,	max_depth);
+		const buffers =	try allocator.alloc([]*WordGroup,	max_depth);
 		errdefer allocator.free(buffers);
 
 		// Allocate each level's buffer
 		for	(buffers) |*buffer|	{
-			buffer.* = try allocator.alloc(*LetterCombo, max_width);
+			buffer.* = try allocator.alloc(*WordGroup, max_width);
 		}
 
 		return FilterBuffers{
@@ -225,14 +157,14 @@ const FilterBuffers	= struct {
 	pub fn filterAtDepth(
 		self: *FilterBuffers,
 		depth: usize,
-		items: []*LetterCombo,
+		items: []*WordGroup,
 		target:	[26]u8,
-	) []*LetterCombo {
+	) []*WordGroup {
 		const buffer = self.buffers[depth];
 		var size: usize	= 0;
 
 		for	(items)	|item| {
-			if (fitsInside(target, item.*))	{
+			if (fitsInsideVec(target, item.counts))	{
 				buffer[size] = item;
 				size +=	1;
 			}
@@ -245,7 +177,7 @@ const FilterBuffers	= struct {
 // prints all the extended anagrams of a particular combination of characters 
 pub fn printAnagrams(
 	target:	*@Vector(26, u8),
-	remaining_combos: []*LetterCombo,
+	remaining_combos: []*WordGroup,
 	combo_buffer: *ComboBuffer,
 	filter_buffers:	*FilterBuffers,
 	solution_buffer: *SolutionBuffer,
@@ -259,9 +191,9 @@ pub fn printAnagrams(
 	}
 
 	for	(remaining_combos, 0..)	|combo,	i| {
-		target.* = target.*	- combo.group.counts;
+		target.* = target.*	- combo.counts;
 		
-		combo_buffer.appendGroup(combo.group);
+		combo_buffer.appendGroup(combo.*);
 
 		const filtered_combos =	filter_buffers.filterAtDepth(
 			depth,
@@ -279,7 +211,7 @@ pub fn printAnagrams(
 		);
 		
 		combo_buffer.removeLast();
-		target.* = target.*	+ combo.group.counts;
+		target.* = target.*	+ combo.counts;
 	}
 }
 
@@ -426,20 +358,20 @@ pub fn main() !void	{
 
 	const combos = try buildCombos(pairs, allocator);
 	defer {
-		for	(combos) |combo| allocator.free(combo.group.words);
+		for	(combos) |combo| allocator.free(combo.words);
 		allocator.free(combos);
 	}
 
-	var pointers = try allocator.alloc(*LetterCombo, combos.len);
+	var pointers = try allocator.alloc(*WordGroup, combos.len);
 	defer allocator.free(pointers);
 	for	(combos, 0..) |*combo, i| {
 		pointers[i]	= combo;
 	}
 
 	// sort pointers
-	std.sort.block(*LetterCombo, pointers, {}, struct {
-	    fn lessThan(_: void, a: *LetterCombo, b: *LetterCombo) bool {
-	        return sumLetterCounts(b.group.counts) < sumLetterCounts(a.group.counts);
+	std.sort.block(*WordGroup, pointers, {}, struct {
+	    fn lessThan(_: void, a: *WordGroup, b: *WordGroup) bool {
+	        return sumLetterCounts(b.counts) < sumLetterCounts(a.counts);
 	    }
 	}.lessThan);
 
