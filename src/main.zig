@@ -23,7 +23,6 @@ pub fn getLetterCounts(
 	return counts;
 }
 
-
 // checks if vector a can fit inside vector b
 // used for checking if a WordGroup can fit inside a target
 pub fn fitsInsideVec(
@@ -68,6 +67,7 @@ fn buildCombos(
 			const combo = WordGroup{
 				.counts = current_vec,
 				.words = try words.toOwnedSlice(),
+				.reps = 1,
 			};
 			
 			try combos.append(combo);
@@ -82,6 +82,7 @@ fn buildCombos(
 	const combo = WordGroup{
 		.counts = current_vec,
 		.words = try words.toOwnedSlice(),
+		.reps = 1,
 	};
 	try combos.append(combo);
 
@@ -94,33 +95,7 @@ fn buildCombos(
 const WordGroup	= struct {
 	counts:	[26]u8,
 	words: [][]const u8,
-};
-
-// is a buffer that holds the current running solution (combination of WordGroups)
-const ComboBuffer =	struct {
-	groups:	[]WordGroup,
-	len: usize,
-	
-	pub fn init(max_depth: usize, allocator: std.mem.Allocator)	!ComboBuffer {
-		const groups = try allocator.alloc(WordGroup, max_depth);
-		return .{
-			.groups	= groups,
-			.len = 0,
-		};
-	}
-
-	pub fn deinit(self:	*ComboBuffer, allocator: std.mem.Allocator)	void {
-		allocator.free(self.groups);
-	}
-
-	pub fn appendGroup(self: *ComboBuffer, group: WordGroup) void {
-		self.groups[self.len] =	group;
-		self.len +=	1;
-	}
-
-	pub fn removeLast(self:	*ComboBuffer) void {
-		self.len -=	1;
-	}
+	reps: usize,
 };
 
 // holds buffers used for filtering the arrays of possible WordGroup at each level
@@ -174,6 +149,45 @@ const FilterBuffers	= struct {
 	}
 };
 
+// is a buffer that holds the current running solution (combination of WordGroups)
+const ComboBuffer =	struct {
+	groups:	[]WordGroup,
+	len: usize,
+	
+	pub fn init(max_depth: usize, allocator: std.mem.Allocator)	!ComboBuffer {
+		const groups = try allocator.alloc(WordGroup, max_depth);
+		return .{
+			.groups	= groups,
+			.len = 0,
+		};
+	}
+
+	pub fn deinit(self:	*ComboBuffer, allocator: std.mem.Allocator)	void {
+		allocator.free(self.groups);
+	}
+
+	pub fn appendGroup(self: *ComboBuffer, group: WordGroup) void {
+		// if the previous word is the same then just increment count
+		if (self.len > 0) {
+			const last_group_ptr = &self.groups[self.len - 1];
+			if (std.mem.eql(u8, &last_group_ptr.counts, &group.counts)) {
+				last_group_ptr.reps += 1;
+				return;
+			}
+		}
+		self.groups[self.len] =	group;
+		self.len +=	1;
+	}
+
+	pub fn removeLast(self:	*ComboBuffer) void {
+		if (self.groups[self.len-1].reps > 1) {
+			self.groups[self.len-1].reps -= 1;
+		} else {
+			self.len -=	1;
+		}
+	}
+};
+
 // prints all the extended anagrams of a particular combination of characters 
 pub fn printAnagrams(
 	target:	*@Vector(26, u8),
@@ -186,7 +200,8 @@ pub fn printAnagrams(
 	const zero_vector: @Vector(26, u8) = @splat(0);
 	// once a solution (combination of WordGroups) is reached, print all combinations of words associated with this solution
 	if (fitsInsideVec(zero_vector, target.*)) {
-		try printSolution(combo_buffer,	solution_buffer);
+		// try printSolution(combo_buffer,	solution_buffer);
+		try printSolutionNoPermutations(combo_buffer, solution_buffer, 0);
 		return;
 	}
 
@@ -270,6 +285,68 @@ pub fn printSolution(
 	}
 }
 
+pub fn printSolutionNoPermutations(
+	combo_buffer: *const ComboBuffer,
+	solution_buffer: *SolutionBuffer,
+	index: usize,
+) anyerror!void {
+	// If we've processed all groups, print the current line.
+	if (index == combo_buffer.len) {
+		if (solution_buffer.len > 0) {
+			// Print everything except trailing space
+			try stdout.writeAll(solution_buffer.bytes[0 .. solution_buffer.len - 1]);
+			try stdout.writeByte('\n');
+		}
+		return;
+	}
+
+	// Otherwise, pick `combo_buffer.groups[index].reps` words from .words
+	const group = combo_buffer.groups[index];
+	const needed = group.reps;
+
+	// We'll do an in-place recursion to choose exactly `needed` items from group.words.
+	try combosInPlace(
+		group.words,
+		needed,
+		0,  // start index in group.words
+		combo_buffer,
+		solution_buffer,
+		index
+	);
+}
+
+// A helper function for "choose `needed` items from `words` (ignoring order)"
+fn combosInPlace(
+    words: [][]const u8,
+    needed: usize,
+    start_index: usize,
+    combo_buffer: *const ComboBuffer,
+    solution_buffer: *SolutionBuffer,
+    group_index: usize,
+) anyerror!void {
+    // If we've picked all items for this group, move on to next group
+    if (needed == 0) {
+        return printSolutionNoPermutations(combo_buffer, solution_buffer, group_index + 1);
+    }
+
+    // If no more words to choose from
+    if (start_index >= words.len) {
+        return; // no solution at this branch
+    }
+
+    // 1) Pick words[start_index]
+    const w = words[start_index];
+    solution_buffer.appendWord(w);
+    // We still allow picking the same index again, because "combinations with repetition".
+    try combosInPlace(words, needed - 1, start_index, combo_buffer, solution_buffer, group_index);
+    solution_buffer.removeLast(w.len);
+
+    // 2) Skip words[start_index] => increment start_index
+    try combosInPlace(words, needed, start_index + 1, combo_buffer, solution_buffer, group_index);
+}
+
+
+
 fn sumLetterCounts(vec:	[26]u8)	u32	{
 	var sum: u32 = 0;
 	for	(vec) |count| {
@@ -310,13 +387,6 @@ pub fn main() !void	{
 	const target = input;
 	var target_counts: @Vector(26, u8)  = getLetterCounts(target);
 
-	// const words	= try readWordsFromFile("/home/josh/.local/bin/words.txt", allocator);
-	// const words	= try filterPairsFromFile("/home/josh/.local/bin/words.txt", target_counts, allocator);
-	// defer allocator.free(words);
-	// if (words.len == 0) return;
-
-	// const pairs	= try getFilteredWordComboPairs(words, target, allocator);
-	// const pairs = try filterPairsFromFile("/home/josh/.local/bin/words.txt", target_counts, allocator);
 
 	// file processing starts=========================================
 	const file = try std.fs.cwd().openFile(filename, .{});
@@ -392,16 +462,5 @@ pub fn main() !void	{
 		&solution_buffer,
 		0,
 	);
-	// try bw.flush();
 }
 
-
-// test "read words" {
-// 	const allocator	= std.heap.page_allocator;
-// 	const words	= try readWordsFromFile("/home/josh/.local/bin/words.txt", allocator);
-// 	defer allocator.free(words);
-// 	for	(words)	|word| {
-// 		std.debug.print("{s} ",	.{word});
-// 	}
-// 	std.debug.print("\n{d}\n", .{words.len});
-// }
