@@ -1,4 +1,6 @@
 const std =	@import("std");
+const builtin = @import("builtin");
+pub const use_mmap = (builtin.os.tag == .linux or builtin.os.tag == .macos);
 const stdout = std.io.getStdOut().writer();
 
 // struct for holding a word with it's corresponding 26 vector of letter counts
@@ -6,6 +8,77 @@ const ComboPair	= struct {
 	combo: [26]u8,
 	word: []const u8,
 };
+
+
+
+// 1) A 26-byte key + hash + eq
+const ComboKey = struct {
+	counts: [26]u8,
+
+	fn hash(self: *const @This()) u64 {
+		// simple FNV-1a
+		var result: u64 = 0xcbf29ce484222325;
+		inline for (self.counts) |b| {
+			result = (result ^ b) * 0x100000001b3;
+		}
+		return result;
+	}
+
+	fn eql(a: *const @This(), b: *const @This()) bool {
+		return std.mem.eql(u8, &a.counts, &b.counts);
+	}
+};
+
+const ComboKeyHashFns = struct {
+	pub fn hash(self: ComboKeyHashFns, key: ComboKey) u64 {
+		_ = self;
+		// FNV-1a example
+		var result: u64 = 0xcbf29ce484222325;
+		inline for (key.counts) |b| {
+			result = (result ^ b) *% 0x100000001b3;
+		}
+		return result;
+	}
+
+	pub fn eql(self: ComboKeyHashFns, a: ComboKey, b: ComboKey) bool {
+		_ = self;
+		return std.mem.eql(u8, &a.counts, &b.counts);
+	}
+};
+
+
+// We'll store: ComboKey -> std.ArrayList([]const u8)
+// so each key (letter combo) has a dynamic array of words.
+const GroupsMap = std.HashMap(ComboKey, std.ArrayList([]const u8), ComboKeyHashFns, 75);
+
+pub fn buildWordGroupsFromMap(
+	map: *GroupsMap,
+	allocator: std.mem.Allocator,
+) ![]WordGroup {
+	// map.items() => iterator over .key and .value
+	var items = map.iterator();
+	const length = map.count();
+
+	// We'll build an array of WordGroup, one per distinct letter combo
+	var groups = try allocator.alloc(WordGroup, length);
+	var i: usize = 0;
+
+	while (items.next()) |entry| {
+		const combo_key = entry.key_ptr;           // ComboKey
+		// const array_list = entry.value_ptr;        // std.ArrayList([]const u8)
+
+		groups[i] = WordGroup{
+			.counts = combo_key.counts,
+			// Convert the ArrayList of words into a slice
+			// .words  = try array_list.toOwnedSlice(),
+			.words = entry.value_ptr.items,
+			.reps   = 1, // can start with 1
+		};
+		i += 1;
+	}
+
+	return groups[0..length];
+}
 
 //returns a vector of counts for each letter in an input word
 pub fn getLetterCounts(
@@ -39,7 +112,7 @@ fn vectorCompare(a:	[26]u8,	b: [26]u8) bool	{
 	return false;
 }
 
-fn buildCombos(
+fn buildGroups(
 	pairs: []ComboPair,
 	allocator: std.mem.Allocator,
 ) ![]WordGroup {
@@ -69,7 +142,6 @@ fn buildCombos(
 				.words = try words.toOwnedSlice(),
 				.reps = 1,
 			};
-			
 			try combos.append(combo);
 
 			// Start new group
@@ -151,11 +223,11 @@ const FilterBuffers	= struct {
 
 // is a buffer that holds the current running solution (combination of WordGroups)
 const ComboBuffer =	struct {
-	groups:	[]WordGroup,
+	groups:	[]*WordGroup,
 	len: usize,
-	
+
 	pub fn init(max_depth: usize, allocator: std.mem.Allocator)	!ComboBuffer {
-		const groups = try allocator.alloc(WordGroup, max_depth);
+		const groups = try allocator.alloc(*WordGroup, max_depth);
 		return .{
 			.groups	= groups,
 			.len = 0,
@@ -166,11 +238,12 @@ const ComboBuffer =	struct {
 		allocator.free(self.groups);
 	}
 
-	pub fn appendGroup(self: *ComboBuffer, group: WordGroup) void {
+	pub fn appendGroup(self: *ComboBuffer, group: *WordGroup) void {
 		// if the previous word is the same then just increment count
 		if (self.len > 0) {
-			const last_group_ptr = &self.groups[self.len - 1];
-			if (std.mem.eql(u8, &last_group_ptr.counts, &group.counts)) {
+			const last_group_ptr = self.groups[self.len - 1];
+			// if (std.mem.eql(u8, &last_group_ptr.counts, &group.counts)) {
+			if (last_group_ptr == group) {
 				last_group_ptr.reps += 1;
 				return;
 			}
@@ -202,13 +275,14 @@ pub fn printAnagrams(
 	if (fitsInsideVec(zero_vector, target.*)) {
 		// try printSolution(combo_buffer,	solution_buffer);
 		try printSolutionNoPermutations(combo_buffer, solution_buffer, 0);
+		// const full_slice = combo_buffer.groups[0..combo_buffer.len];
+		// try printSolutionDeduped(full_slice, solution_buffer);
 		return;
 	}
 
-	for	(remaining_combos, 0..)	|combo,	i| {
+	for	(remaining_combos, 0..)	|combo, i| {
 		target.* = target.*	- combo.counts;
-		
-		combo_buffer.appendGroup(combo.*);
+		combo_buffer.appendGroup(combo);
 
 		const filtered_combos =	filter_buffers.filterAtDepth(
 			depth,
@@ -224,7 +298,6 @@ pub fn printAnagrams(
 			solution_buffer,
 			depth +	1,
 		);
-		
 		combo_buffer.removeLast();
 		target.* = target.*	+ combo.counts;
 	}
@@ -234,7 +307,7 @@ pub fn printAnagrams(
 const SolutionBuffer = struct {
 	bytes: []u8,
 	len: usize,
-	
+
 	pub fn init(max_bytes: usize, allocator: std.mem.Allocator)	!SolutionBuffer	{
 		const bytes	= try allocator.alloc(u8, max_bytes);
 		return .{
@@ -260,30 +333,30 @@ const SolutionBuffer = struct {
 	}
 };
 
-// prints all the combinations of words associated with a particular combination of WordGroups
-pub fn printSolution(
-	combo_buffer: *const ComboBuffer,
-	solution_buffer: *SolutionBuffer,
-) !void	{
-	if (combo_buffer.len ==	0) {
-		if (solution_buffer.len	> 0) {
-			try stdout.writeAll(solution_buffer.bytes[0	.. solution_buffer.len - 1]);
-			try stdout.writeByte('\n');
-		}
-		return;
-	}
+// prints all the combinations of words associated with a particular combination of WordGroups Doesn't work because we keep track of repetitions now
+// pub fn printSolution(
+// 	combo_buffer: *const ComboBuffer,
+// 	solution_buffer: *SolutionBuffer,
+// ) !void	{
+// 	if (combo_buffer.len ==	0) {
+// 		if (solution_buffer.len	> 0) {
+// 			try stdout.writeAll(solution_buffer.bytes[0	.. solution_buffer.len - 1]);
+// 			try stdout.writeByte('\n');
+// 		}
+// 		return;
+// 	}
 
-	const group	= combo_buffer.groups[0];
-	for	(group.words) |word| {
-		solution_buffer.appendWord(word);
-		var next_buffer	= ComboBuffer{
-			.groups	= combo_buffer.groups[1..],
-			.len = combo_buffer.len	- 1,
-		};
-		try printSolution(&next_buffer,	solution_buffer);
-		solution_buffer.removeLast(word.len);
-	}
-}
+// 	const group	= combo_buffer.groups[0];
+// 	for	(group.words) |word| {
+// 		solution_buffer.appendWord(word);
+// 		var next_buffer	= ComboBuffer{
+// 			.groups	= combo_buffer.groups[1..],
+// 			.len = combo_buffer.len	- 1,
+// 		};
+// 		try printSolution(&next_buffer,	solution_buffer);
+// 		solution_buffer.removeLast(word.len);
+// 	}
+// }
 
 pub fn printSolutionNoPermutations(
 	combo_buffer: *const ComboBuffer,
@@ -305,7 +378,7 @@ pub fn printSolutionNoPermutations(
 	const needed = group.reps;
 
 	// We'll do an in-place recursion to choose exactly `needed` items from group.words.
-	try combosInPlace(
+	try combosInPlace2(
 		group.words,
 		needed,
 		0,  // start index in group.words
@@ -316,7 +389,7 @@ pub fn printSolutionNoPermutations(
 }
 
 // A helper function for "choose `needed` items from `words` (ignoring order)"
-fn combosInPlace(
+fn combosInPlace2(
     words: [][]const u8,
     needed: usize,
     start_index: usize,
@@ -338,13 +411,52 @@ fn combosInPlace(
     const w = words[start_index];
     solution_buffer.appendWord(w);
     // We still allow picking the same index again, because "combinations with repetition".
-    try combosInPlace(words, needed - 1, start_index, combo_buffer, solution_buffer, group_index);
+    try combosInPlace2(words, needed - 1, start_index, combo_buffer, solution_buffer, group_index);
     solution_buffer.removeLast(w.len);
 
     // 2) Skip words[start_index] => increment start_index
-    try combosInPlace(words, needed, start_index + 1, combo_buffer, solution_buffer, group_index);
+    try combosInPlace2(words, needed, start_index + 1, combo_buffer, solution_buffer, group_index);
 }
 
+
+pub fn printSolutionDeduped(
+	groups: []*const WordGroup,
+	solution_buffer: *SolutionBuffer,
+) anyerror!void {
+	if (groups.len == 0) {
+		// Print the line
+		if (solution_buffer.len > 0) {
+			try stdout.writeAll(solution_buffer.bytes[0 .. solution_buffer.len - 1]);
+			try stdout.writeByte('\n');
+		}
+		return;
+	}
+
+	const group = groups[0];
+	const needed = group.reps;
+	try combosInPlace(group.words, needed, solution_buffer, groups[1..]);
+}
+
+fn combosInPlace(
+	words: [][]const u8,
+	needed: usize,
+	solution_buffer: *SolutionBuffer,
+	rest: []*const WordGroup,
+) anyerror!void {
+	if (needed == 0) {
+		return printSolutionDeduped(rest, solution_buffer);
+	}
+	if (words.len == 0) {
+		return;
+	}
+	// pick words[0]
+	const w = words[0];
+	solution_buffer.appendWord(w);
+	try combosInPlace(words, needed - 1, solution_buffer, rest);
+	solution_buffer.removeLast(w.len);
+	// skip words[0]
+	try combosInPlace(words[1..], needed, solution_buffer, rest);
+}
 
 
 fn sumLetterCounts(vec:	[26]u8)	u32	{
@@ -358,7 +470,8 @@ fn sumLetterCounts(vec:	[26]u8)	u32	{
 pub fn main() !void	{
 	var gpa	= std.heap.GeneralPurposeAllocator(.{}){};
 	const allocator	= gpa.allocator();
-	const filename = "/home/josh/.local/bin/words.txt";
+	// const filename = "/home/josh/.local/bin/words.txt";
+	const filename = "/home/josh/.local/bin/wordswodupes.txt";
 
 	// bw =	std.io.bufferedWriter(std.io.getStdOut().writer());
 	// defer bw.flush()	catch unreachable;
@@ -394,6 +507,7 @@ pub fn main() !void	{
 	// get file size
 	const file_size	= try file.getEndPos();
 
+	// ***USE FOR LINUX/MAC***
 	const buffer = try std.posix.mmap(
 		null,
 		file_size,
@@ -404,51 +518,89 @@ pub fn main() !void	{
 	);
 	defer std.posix.munmap(buffer);
 
+	// ***USE FOR WINDOWS***
 	// const buffer = try allocator.alloc(u8, file_size);
 	// defer allocator.free(buffer);
 	// _ = try file.readAll(buffer);
 
 	var lines = std.mem.splitSequence(u8, buffer, "\n");
-	var pairs_list = std.ArrayList(ComboPair).init(allocator);
-	while (lines.next()) |word|	{
-		if (word.len > 0) {
-			// std.debug.print("{s},", .{word});
-    		const word_counts =	getLetterCounts(word);
-    		if (!fitsInsideVec(target_counts, word_counts)) continue;
-            try pairs_list.append(.{
-                .combo = word_counts,
-                .word  = word
-            });
-		}
-	}
-	const pairs = try pairs_list.toOwnedSlice();
-	defer allocator.free(pairs);
-	if (pairs.len == 0) return;
+	// var pairs_list = std.ArrayList(ComboPair).init(allocator);
+	// while (lines.next()) |word|	{
+	// 	if (word.len > 0) {
+	// 		// std.debug.print("{s},", .{word});
+ //    		const word_counts =	getLetterCounts(word);
+ //    		if (!fitsInsideVec(target_counts, word_counts)) continue;
+ //            try pairs_list.append(.{
+ //                .combo = word_counts,
+ //                .word  = word
+ //            });
+	// 	}
+	// }
+	// const pairs = try pairs_list.toOwnedSlice();
+	// defer allocator.free(pairs);
+	// if (pairs.len == 0) return;
+
 	// file processing ends===========================================
 
-	const combos = try buildCombos(pairs, allocator);
-	defer {
-		for	(combos) |combo| allocator.free(combo.words);
-		allocator.free(combos);
+	// const groups = try buildGroups(pairs, allocator);
+	// defer {
+	// 	for	(groups) |combo| allocator.free(combo.words);
+	// 	allocator.free(groups);
+	// }
+
+
+	// 1) Initialize the map
+	var map = GroupsMap.init(allocator);
+	defer map.deinit(); // We'll build WordGroups from this map, then free it
+
+	while (lines.next()) |word| {
+		if (word.len == 0) continue;
+
+		const word_counts = getLetterCounts(word);
+		if (!fitsInsideVec(target_counts, word_counts)) continue;
+
+		// Build key
+		const key = ComboKey{ .counts = word_counts };
+
+		// Insert or retrieve existing
+		const res = try map.getOrPut(key);
+		if (res.found_existing) {
+			// key already exists in the map
+			try res.value_ptr.*.append(word);
+		} else {
+			// newly inserted => must initialize res.value_ptr.*
+			res.value_ptr.* = std.ArrayList([]const u8).init(allocator);
+			try res.value_ptr.*.append(word);
+		}
+
 	}
 
-	var pointers = try allocator.alloc(*WordGroup, combos.len);
+	const groups = try buildWordGroupsFromMap(&map, allocator);
+		defer {
+			// free each group.words
+			// for (groups) |g| {
+			// 	allocator.free(g.words);
+			// }
+			allocator.free(groups);
+		}
+
+	var pointers = try allocator.alloc(*WordGroup, groups.len);
 	defer allocator.free(pointers);
-	for	(combos, 0..) |*combo, i| {
+	for	(groups, 0..) |*combo, i| {
 		pointers[i]	= combo;
 	}
 
 	// sort pointers
 	std.sort.block(*WordGroup, pointers, {}, struct {
-	    fn lessThan(_: void, a: *WordGroup, b: *WordGroup) bool {
-	        return sumLetterCounts(b.counts) < sumLetterCounts(a.counts);
-	    }
+		fn lessThan(_: void, a: *WordGroup, b: *WordGroup) bool {
+			return sumLetterCounts(b.counts) < sumLetterCounts(a.counts);
+		}
 	}.lessThan);
 
 	var combo_buffer = try ComboBuffer.init(target.len,	allocator);
 	defer combo_buffer.deinit(allocator);
 
-	var filter_buffers = try FilterBuffers.init(target.len,	combos.len,	allocator);
+	var filter_buffers = try FilterBuffers.init(target.len,	groups.len,	allocator);
 	defer filter_buffers.deinit();
 
 	var solution_buffer	= try SolutionBuffer.init(target.len * 2, allocator);
