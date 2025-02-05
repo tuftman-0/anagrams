@@ -112,62 +112,13 @@ fn vectorCompare(a:	[26]u8,	b: [26]u8) bool	{
 	return false;
 }
 
-fn buildGroups(
-	pairs: []ComboPair,
-	allocator: std.mem.Allocator,
-) ![]WordGroup {
-	// First sort by vectors
-	std.sort.block(ComboPair, pairs, {}, struct {
-		fn lessThan(_: void, a: ComboPair, b: ComboPair) bool {
-			return vectorCompare(a.combo, b.combo);
-		}
-	}.lessThan);
-
-	// Now group them
-	var combos = std.ArrayList(WordGroup).init(allocator);
-	var words = std.ArrayList([]const u8).init(allocator);
-	errdefer words.deinit();
-	errdefer combos.deinit();
-
-	var current_vec = pairs[0].combo;
-	try words.append(pairs[0].word);
-
-	for (pairs[1..]) |pair| {
-		if (std.mem.eql(u8, &current_vec, &pair.combo)) {
-			try words.append(pair.word);
-		} else {
-			// Create combo for previous group
-			const combo = WordGroup{
-				.counts = current_vec,
-				.words = try words.toOwnedSlice(),
-				.reps = 1,
-			};
-			try combos.append(combo);
-
-			// Start new group
-			current_vec = pair.combo;
-			try words.append(pair.word);
-		}
-	}
-
-	// Don't forget last group
-	const combo = WordGroup{
-		.counts = current_vec,
-		.words = try words.toOwnedSlice(),
-		.reps = 1,
-	};
-	try combos.append(combo);
-
-	return try combos.toOwnedSlice();
-}
-
 // words ->	combo word pairs ->	filtered combo word pairs -> words grouped by combo
 
 // struct that represents the group of words associated with a particular combination of letters
 const WordGroup	= struct {
-	counts:	[26]u8,
-	words: [][]const u8,
-	reps: usize,
+	counts:	[26]u8, // counts of each of the letters
+	words: [][]const u8, // slice of all the words that this combo represents
+	reps: usize, // number of times that this combination is repeated in a solution
 };
 
 // holds buffers used for filtering the arrays of possible WordGroup at each level
@@ -274,9 +225,9 @@ pub fn printAnagrams(
 	// once a solution (combination of WordGroups) is reached, print all combinations of words associated with this solution
 	if (fitsInsideVec(zero_vector, target.*)) {
 		// try printSolution(combo_buffer,	solution_buffer);
-		try printSolutionNoPermutations(combo_buffer, solution_buffer, 0);
-		// const full_slice = combo_buffer.groups[0..combo_buffer.len];
-		// try printSolutionDeduped(full_slice, solution_buffer);
+		// try printSolutionNoPermutations(combo_buffer, solution_buffer, 0);
+		const solution = combo_buffer.groups[0..combo_buffer.len];
+		try printSolutionDeduped(solution, solution_buffer);
 		return;
 	}
 
@@ -332,31 +283,6 @@ const SolutionBuffer = struct {
 		self.len -=	word_len + 1;
 	}
 };
-
-// prints all the combinations of words associated with a particular combination of WordGroups Doesn't work because we keep track of repetitions now
-// pub fn printSolution(
-// 	combo_buffer: *const ComboBuffer,
-// 	solution_buffer: *SolutionBuffer,
-// ) !void	{
-// 	if (combo_buffer.len ==	0) {
-// 		if (solution_buffer.len	> 0) {
-// 			try stdout.writeAll(solution_buffer.bytes[0	.. solution_buffer.len - 1]);
-// 			try stdout.writeByte('\n');
-// 		}
-// 		return;
-// 	}
-
-// 	const group	= combo_buffer.groups[0];
-// 	for	(group.words) |word| {
-// 		solution_buffer.appendWord(word);
-// 		var next_buffer	= ComboBuffer{
-// 			.groups	= combo_buffer.groups[1..],
-// 			.len = combo_buffer.len	- 1,
-// 		};
-// 		try printSolution(&next_buffer,	solution_buffer);
-// 		solution_buffer.removeLast(word.len);
-// 	}
-// }
 
 pub fn printSolutionNoPermutations(
 	combo_buffer: *const ComboBuffer,
@@ -433,8 +359,7 @@ pub fn printSolutionDeduped(
 	}
 
 	const group = groups[0];
-	const needed = group.reps;
-	try combosInPlace(group.words, needed, solution_buffer, groups[1..]);
+	try combosInPlace(group.words, group.reps, solution_buffer, groups[1..]);
 }
 
 fn combosInPlace(
@@ -470,8 +395,8 @@ fn sumLetterCounts(vec:	[26]u8)	u32	{
 pub fn main() !void	{
 	var gpa	= std.heap.GeneralPurposeAllocator(.{}){};
 	const allocator	= gpa.allocator();
-	// const filename = "/home/josh/.local/bin/words.txt";
-	const filename = "/home/josh/.local/bin/wordswodupes.txt";
+	const filename = "/home/josh/.local/bin/words.txt";
+	// const filename = "/home/josh/.local/bin/wordswodupes.txt";
 
 	// bw =	std.io.bufferedWriter(std.io.getStdOut().writer());
 	// defer bw.flush()	catch unreachable;
