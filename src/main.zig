@@ -3,6 +3,14 @@ const builtin = @import("builtin");
 pub const use_mmap = (builtin.os.tag == .linux or builtin.os.tag == .macos);
 const stdout = std.io.getStdOut().writer();
 
+// OLD: words -> combo word pairs -> filtered combo word pairs -> words grouped by combo
+// NEW: words -> filter + add into map from combos to groups -> from map create array of WordGroups
+// WordGroups contain {combination of letters, slice of words represented by that combination , # of repetitions of this group in a solution}
+// in our printAnagrams function we produce every combination of WordGroups that exactly add up to the target
+// once a solution is produce we pass it to the printSolution function
+// which goes through the lists of words that each WordGroup represents
+// printing all of the combinations of words that exist for that solution
+
 // 1) A 26-byte key + hash + eq
 const ComboKey = struct {
 	counts: [26]u8,
@@ -24,7 +32,7 @@ const ComboKey = struct {
 const ComboKeyHashFns = struct {
 	pub fn hash(self: ComboKeyHashFns, key: ComboKey) u64 {
 		_ = self;
-		// FNV-1a example
+		// FNV-1a
 		var result: u64 = 0xcbf29ce484222325;
 		inline for (key.counts) |b| {
 			result = (result ^ b) *% 0x100000001b3;
@@ -43,32 +51,6 @@ const ComboKeyHashFns = struct {
 // so each key (letter combo) has a dynamic array of words.
 const GroupsMap = std.HashMap(ComboKey, std.ArrayList([]const u8), ComboKeyHashFns, 85);
 
-pub fn buildWordGroupsFromMap(
-	map: *GroupsMap,
-	allocator: std.mem.Allocator,
-) ![]WordGroup {
-	// map.items() => iterator over .key and .value
-	var items = map.iterator();
-	const length = map.count();
-
-	// We'll build an array of WordGroup, one per distinct letter combo
-	var groups = try allocator.alloc(WordGroup, length);
-	var i: usize = 0;
-
-	while (items.next()) |entry| {
-		const combo_key = entry.key_ptr;
-
-		groups[i] = WordGroup{
-			.counts = combo_key.counts,
-			.words = entry.value_ptr.items,
-			.reps   = 1,
-		};
-		i += 1;
-	}
-
-	return groups[0..length];
-}
-
 //returns a vector of counts for each letter in an input word
 pub fn getLetterCounts(
 	word: []const u8,
@@ -86,7 +68,10 @@ pub fn getLetterCounts(
 }
 
 // checks if vector a can fit inside vector b
-// used for checking if a WordGroup can fit inside a target
+// used for checking if the set of letters a WordGroup is a subset of the letters in the target
+// I already tried a more complicated system where I also stored the set of nonzero indices in each combination to be checked
+// and only checked the values at those indices
+// it was slower than these vector calculations by a very small margin
 pub fn fitsInsideVec(
 	b: @Vector(26,u8),
 	a: @Vector(26,u8),
@@ -94,21 +79,107 @@ pub fn fitsInsideVec(
 	return @reduce(.And, a <= b);
 }
 
-fn vectorCompare(a:	[26]u8,	b: [26]u8) bool	{
-	for	(a,	b) |a_val, b_val| {
-		if (a_val != b_val)	return a_val < b_val;
-	}
-	return false;
-}
+const FileStuff = struct {
+    map: GroupsMap,  // Change from pointer to owned value
+    mmap: []align(4096) const u8,
 
-// words ->	combo word pairs ->	filtered combo word pairs -> words grouped by combo
+    pub fn deinit(self: *FileStuff) void {
+        self.map.deinit();
+        std.posix.munmap(@constCast(self.mmap));
+    }
+};
+
+// function for reading a word list file and building a hashmap
+// builds a map from combinations of letters to the group of words that each combo represents
+pub fn buildMapFromFile(
+	filename: []const u8,
+	target_counts: [26]u8,
+	allocator: std.mem.Allocator,
+) !FileStuff {
+	const file = try std.fs.cwd().openFile(filename, .{});
+	defer file.close();
+	// get file size
+	const file_size	= try file.getEndPos();
+
+	// ***USE FOR LINUX/MAC***
+	const buffer = try std.posix.mmap(
+		null,
+		file_size,
+		std.posix.PROT.READ,
+		.{.TYPE = .SHARED},
+		file.handle,
+		0,
+	);
+
+	// ***USE FOR WINDOWS*** (will have to change FileStuff to work with this)
+	// const buffer = try allocator.alloc(u8, file_size);
+	// defer allocator.free(buffer);
+	// _ = try file.readAll(buffer);
+
+	var lines = std.mem.splitSequence(u8, buffer, "\n");
+	var map = GroupsMap.init(allocator);
+
+	while (lines.next()) |word| {
+		if (word.len == 0) continue;
+
+		const word_counts = getLetterCounts(word);
+		if (!fitsInsideVec(target_counts, word_counts)) continue;
+
+		// Build key
+		const key = ComboKey{ .counts = word_counts };
+
+		// Insert or retrieve existing
+		const res = try map.getOrPut(key);
+		if (res.found_existing) {
+			// key already exists in the map
+			try res.value_ptr.*.append(word);
+		} else {
+			// newly inserted => must initialize res.value_ptr.*
+			res.value_ptr.* = std.ArrayList([]const u8).init(allocator);
+			try res.value_ptr.*.append(word);
+		}
+	}
+
+	return FileStuff{
+		.map  = map,
+		.mmap = buffer
+	};
+}
 
 // struct that represents the group of words associated with a particular combination of letters
 const WordGroup	= struct {
-	counts:	[26]u8, // counts of each of the letters
+	counts:	[26]u8,      // counts of each of the letters
 	words: [][]const u8, // slice of all the words that this combo represents
-	reps: usize, // number of times that this combination is repeated in a solution
+	reps: usize,         // number of times that this combination is repeated in a solution
 };
+
+// function that takes the map from combos to groups and makes a slice of WordGroups
+//
+pub fn buildWordGroupsFromMap(
+	map: *GroupsMap,
+	allocator: std.mem.Allocator,
+) ![]WordGroup {
+	// map.items() => iterator over .key and .value
+	var items = map.iterator();
+	const length = map.count();
+
+	// We'll build an array of WordGroup, one per distinct letter combo
+	var groups = try allocator.alloc(WordGroup, length);
+	var i: usize = 0;
+
+	while (items.next()) |entry| {
+		const combo_key = entry.key_ptr;
+
+		groups[i] = WordGroup{
+			.counts = combo_key.counts,
+			.words  = entry.value_ptr.items,
+			.reps   = 1,
+		};
+		i += 1;
+	}
+
+	return groups[0..length];
+}
 
 // holds buffers used for filtering the arrays of possible WordGroup at each level
 const FilterBuffers	= struct {
@@ -272,7 +343,7 @@ const SolutionBuffer = struct {
 	}
 };
 
-
+// prints all of the combinations of words represented by a solution (combination of WordGroups)
 pub fn printSolution(
 	groups: []*const WordGroup,
 	solution_buffer: *SolutionBuffer,
@@ -319,6 +390,7 @@ pub fn main() !void	{
 	var gpa	= std.heap.GeneralPurposeAllocator(.{}){};
 	const allocator	= gpa.allocator();
 	const filename = "/home/josh/.local/bin/words.txt";
+	// const filename = "~/.local/bin/words.txt";
 	// const filename = "/home/josh/.local/bin/wordswodupes.txt";
 	
 
@@ -346,64 +418,10 @@ pub fn main() !void	{
 	const target = input;
 	var target_counts: @Vector(26, u8) = getLetterCounts(target);
 
-	// file processing starts=========================================
-	const file = try std.fs.cwd().openFile(filename, .{});
-	defer file.close();
-	// get file size
-	const file_size	= try file.getEndPos();
+	var file_stuff = try buildMapFromFile(filename, target_counts, allocator);
+	defer file_stuff.deinit();
 
-	// ***USE FOR LINUX/MAC***
-	const buffer = try std.posix.mmap(
-		null,
-		file_size,
-		std.posix.PROT.READ,
-		.{.TYPE = .SHARED},
-		file.handle,
-		0,
-	);
-	defer std.posix.munmap(buffer);
-
-	// ***USE FOR WINDOWS***
-	// const buffer = try allocator.alloc(u8, file_size);
-	// defer allocator.free(buffer);
-	// _ = try file.readAll(buffer);
-
-	var lines = std.mem.splitSequence(u8, buffer, "\n");
-	var nlines: usize = 0;
-
-	var map = GroupsMap.init(allocator);
-	defer map.deinit();
-
-	while (lines.next()) |word| {
-		if (word.len == 0) continue;
-
-		const word_counts = getLetterCounts(word);
-		if (!fitsInsideVec(target_counts, word_counts)) continue;
-
-		// Build key
-		const key = ComboKey{ .counts = word_counts };
-
-		// Insert or retrieve existing
-		const res = try map.getOrPut(key);
-		if (res.found_existing) {
-			// key already exists in the map
-			try res.value_ptr.*.append(word);
-		} else {
-			// newly inserted => must initialize res.value_ptr.*
-			res.value_ptr.* = std.ArrayList([]const u8).init(allocator);
-			try res.value_ptr.*.append(word);
-		}
-		nlines += 1;
-	}
-
-	// file processing ends===========================================
-	std.debug.print("# of words:  {d}\n", .{nlines});
-	std.debug.print("# of combos: {d}\n", .{map.count()});
-
-	// try stdout.print("# of words:  {d}\n", .{nlines});
-	// try stdout.print("# of combos: {d}\n", .{map.count()});
-
-	const groups = try buildWordGroupsFromMap(&map, allocator);
+	const groups = try buildWordGroupsFromMap(&file_stuff.map, allocator);
 	defer  allocator.free(groups);
 	
 	var pointers = try allocator.alloc(*WordGroup, groups.len);
@@ -439,231 +457,7 @@ pub fn main() !void	{
 }
 
 
+// serialization format for potential storing of WordGroups, so initial processing can be skipped
 // File format:
 // [26 bytes for counts][4 bytes for num_words][word1\n][word2\n]...[wordN\n]
 // Repeated for each WordGroup
-
-// 
-
-// pub fn readGroupsFromFile(
-//     filename: []const u8,
-//     allocator: std.mem.Allocator,
-// ) ![]WordGroup {
-//     const file = try std.fs.cwd().openFile(filename, .{});
-//     defer file.close();
-//     const reader = file.reader();
-
-//     var groups = std.ArrayList(WordGroup).init(allocator);
-//     errdefer {
-//         for (groups.items) |group| {
-//             for (group.words) |word| {
-//                 allocator.free(word);
-//             }
-//             allocator.free(group.words);
-//         }
-//         groups.deinit();
-//     }
-
-//     while (true) {
-//         // Read letter counts
-//         var counts: [26]u8 = undefined;
-//         const counts_read = try reader.readAll(&counts);
-//         if (counts_read == 0) break; // End of file
-//         if (counts_read != 26) return error.InvalidFormat;
-
-//         // Read number of words
-//         var num_words_bytes: [4]u8 = undefined;
-//         if (try reader.readAll(&num_words_bytes) != 4) return error.InvalidFormat;
-//         const num_words = std.mem.bytesToValue(u32, &num_words_bytes);
-
-//         // Read words
-//         var words = try std.ArrayList([]const u8).initCapacity(allocator, num_words);
-//         errdefer {
-//             for (words.items) |word| {
-//                 allocator.free(word);
-//             }
-//             words.deinit();
-//         }
-
-//         var buf = std.ArrayList(u8).init(allocator);
-//         defer buf.deinit();
-
-//         var i: u32 = 0;
-//         while (i < num_words) : (i += 1) {
-//             // Clear buffer for next word
-//             buf.clearRetainingCapacity();
-
-//             // Read until newline
-//             while (true) {
-//                 const byte = reader.readByte() catch |err| switch (err) {
-//                     error.EndOfStream => return error.InvalidFormat,
-//                     else => return err,
-//                 };
-//                 if (byte == '\n') break;
-//                 try buf.append(byte);
-//             }
-
-//             // Allocate and store word
-//             const word = try allocator.alloc(u8, buf.items.len);
-//             @memcpy(word, buf.items);
-//             try words.append(word);
-//         }
-
-//         // Create and append WordGroup
-//         try groups.append(.{
-//             .counts = counts,
-//             .words = try words.toOwnedSlice(),
-//             .reps = 1,
-//         });
-//     }
-
-//     return try groups.toOwnedSlice();
-// }
-
-// Helper function to load groups, either from cache or by processing the word file
-// pub fn loadGroups(
-//     words_filename: []const u8,
-//     cache_filename: []const u8,
-//     target_counts: @Vector(26, u8),
-//     allocator: std.mem.Allocator,
-// ) ![]WordGroup {
-//     // Try to read from cache file
-//     if (readGroupsFromFile(cache_filename, allocator)) |cached_groups| {
-//         std.debug.print("Using cached word groups\n", .{});
-//         return cached_groups;
-//     } else |_| {
-//         std.debug.print("Cache miss, processing word file\n", .{});
-//         // Cache miss or error, process the word file
-//         const file = try std.fs.cwd().openFile(words_filename, .{});
-//         defer file.close();
-//         const file_size = try file.getEndPos();
-
-//         const buffer = try std.posix.mmap(
-//             null,
-//             file_size,
-//             std.posix.PROT.READ,
-//             .{.TYPE = .SHARED},
-//             file.handle,
-//             0,
-//         );
-//         defer std.posix.munmap(buffer);
-
-//         var map = GroupsMap.init(allocator);
-//         defer {
-//             var it = map.iterator();
-//             while (it.next()) |entry| {
-//                 entry.value_ptr.deinit();
-//             }
-//             map.deinit();
-//         }
-
-//         var lines = std.mem.splitSequence(u8, buffer, "\n");
-//         while (lines.next()) |word| {
-//             if (word.len == 0) continue;
-
-//             const word_counts = getLetterCounts(word);
-//             if (!fitsInsideVec(target_counts, word_counts)) continue;
-
-//             // Make a copy of the word
-//             const word_copy = try allocator.alloc(u8, word.len);
-//             @memcpy(word_copy, word);
-
-//             const key = ComboKey{ .counts = word_counts };
-//             const res = try map.getOrPut(key);
-//             if (res.found_existing) {
-//                 try res.value_ptr.*.append(word_copy);
-//             } else {
-//                 res.value_ptr.* = std.ArrayList([]const u8).init(allocator);
-//                 try res.value_ptr.*.append(word_copy);
-//             }
-//         }
-
-//         const new_groups = try buildWordGroupsFromMap(&map, allocator);
-
-//         // Write to cache for next time
-//         writeGroupsToFile(new_groups, cache_filename, allocator) catch |err| {
-//             std.debug.print("Warning: Failed to write cache file: {}\n", .{err});
-//         };
-
-//         return new_groups;
-//     }
-// }
-
-// pub fn main() !void {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     const allocator = gpa.allocator();
-//     defer _ = gpa.deinit();
-
-//     const words_filename = "/home/josh/.local/bin/words.txt";
-//     const cache_filename = "/home/josh/.local/bin/wordgroups.bin";
-
-//     // Get command line args
-//     var args = try std.process.argsWithAllocator(allocator);
-//     defer args.deinit();
-//     _ = args.next();
-
-//     // Get input either from args or stdin
-//     var input: []const u8 = undefined;
-//     var input_buf: [1024]u8 = undefined;
-
-//     if (args.next()) |arg| {
-//         input = arg;
-//     } else {
-//         const stdin = std.io.getStdIn();
-//         const bytes_read = try stdin.read(&input_buf);
-//         input = std.mem.trimRight(u8, input_buf[0..bytes_read], "\r\n");
-//     }
-
-//     const target = input;
-//     var target_counts: @Vector(26, u8) = getLetterCounts(target);
-
-//     // Load groups either from cache or by processing words file
-//     const groups = try loadGroups(words_filename, cache_filename, target_counts, allocator);
-//     defer {
-//         for (groups) |group| {
-//             for (group.words) |word| {
-//                 allocator.free(word);
-//             }
-//             allocator.free(group.words);
-//         }
-//         allocator.free(groups);
-//     }
-
-//     // Create and sort pointers
-//     var pointers = try allocator.alloc(*WordGroup, groups.len);
-//     defer allocator.free(pointers);
-//     for (groups, 0..) |*combo, i| {
-//         pointers[i] = combo;
-//     }
-
-//     // Sort pointers by letter count (larger counts first)
-//     std.sort.block(*WordGroup, pointers, {}, struct {
-//         fn lessThan(_: void, a: *WordGroup, b: *WordGroup) bool {
-//             return sumLetterCounts(b.counts) < sumLetterCounts(a.counts);
-//         }
-//     }.lessThan);
-
-//     var combo_buffer = try ComboBuffer.init(target.len, allocator);
-//     defer combo_buffer.deinit(allocator);
-
-//     var filter_buffers = try FilterBuffers.init(target.len, groups.len, allocator);
-//     defer filter_buffers.deinit();
-
-//     var solution_buffer = try SolutionBuffer.init(target.len * 2, allocator);
-//     defer solution_buffer.deinit(allocator);
-
-//     try printAnagrams(
-//         &target_counts,
-//         pointers,
-//         &combo_buffer,
-//         &filter_buffers,
-//         &solution_buffer,
-//         0,
-//     );
-// }
-
-
-
-
-
-
