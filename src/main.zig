@@ -390,9 +390,6 @@ pub fn main() !void	{
 	var gpa	= std.heap.GeneralPurposeAllocator(.{}){};
 	const allocator	= gpa.allocator();
 	const filename = "/home/josh/.local/bin/words.txt";
-	// const filename = "~/.local/bin/words.txt";
-	// const filename = "/home/josh/.local/bin/wordswodupes.txt";
-	
 
 	// Get command line args
 	var args = try std.process.argsWithAllocator(allocator);
@@ -415,8 +412,7 @@ pub fn main() !void	{
 		input =	std.mem.trimRight(u8, input_buf[0..bytes_read],	"\r\n");
 	}
 
-	const target = input;
-	var target_counts: @Vector(26, u8) = getLetterCounts(target);
+	var target_counts: @Vector(26, u8) = getLetterCounts(input);
 
 	var file_stuff = try buildMapFromFile(filename, target_counts, allocator);
 	defer file_stuff.deinit();
@@ -437,13 +433,14 @@ pub fn main() !void	{
 		}
 	}.lessThan);
 
-	var combo_buffer = try ComboBuffer.init(target.len,	allocator);
+	// *TODO* this could probably allocate less if we figure out a way to put better bounds on it
+	var combo_buffer = try ComboBuffer.init(input.len,	allocator);
 	defer combo_buffer.deinit(allocator);
 
-	var filter_buffers = try FilterBuffers.init(target.len,	groups.len,	allocator);
+	var filter_buffers = try FilterBuffers.init(input.len,	groups.len,	allocator);
 	defer filter_buffers.deinit();
 
-	var solution_buffer	= try SolutionBuffer.init(target.len * 2, allocator);
+	var solution_buffer	= try SolutionBuffer.init(input.len * 2, allocator);
 	defer solution_buffer.deinit(allocator);
 
 	try printAnagrams(
