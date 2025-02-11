@@ -3,14 +3,6 @@ const builtin = @import("builtin");
 pub const use_mmap = (builtin.os.tag == .linux or builtin.os.tag == .macos);
 const stdout = std.io.getStdOut().writer();
 
-// struct for holding a word with it's corresponding 26 vector of letter counts
-const ComboPair	= struct {
-	combo: [26]u8,
-	word: []const u8,
-};
-
-
-
 // 1) A 26-byte key + hash + eq
 const ComboKey = struct {
 	counts: [26]u8,
@@ -64,15 +56,12 @@ pub fn buildWordGroupsFromMap(
 	var i: usize = 0;
 
 	while (items.next()) |entry| {
-		const combo_key = entry.key_ptr;           // ComboKey
-		// const array_list = entry.value_ptr;        // std.ArrayList([]const u8)
+		const combo_key = entry.key_ptr;
 
 		groups[i] = WordGroup{
 			.counts = combo_key.counts,
-			// Convert the ArrayList of words into a slice
-			// .words  = try array_list.toOwnedSlice(),
 			.words = entry.value_ptr.items,
-			.reps   = 1, // can start with 1
+			.reps   = 1,
 		};
 		i += 1;
 	}
@@ -82,7 +71,7 @@ pub fn buildWordGroupsFromMap(
 
 //returns a vector of counts for each letter in an input word
 pub fn getLetterCounts(
-	word: []const u8
+	word: []const u8,
 ) [26]u8 {
 	// construct a 26 byte long array to store the number of each letter
 	var counts:	[26]u8 = std.mem.zeroes([26]u8);
@@ -225,10 +214,8 @@ pub fn printAnagrams(
 	// once a solution (combination of WordGroups) is reached, print all combinations of words associated with this solution
 	if (fitsInsideVec(zero_vector, target.*)) {
 	// if (std.mem) {
-		// try printSolution(combo_buffer,	solution_buffer);
-		// try printSolutionNoPermutations(combo_buffer, solution_buffer, 0);
 		const solution = combo_buffer.groups[0..combo_buffer.len];
-		try printSolutionDeduped(solution, solution_buffer);
+		try printSolution(solution, solution_buffer);
 		return;
 	}
 
@@ -285,68 +272,8 @@ const SolutionBuffer = struct {
 	}
 };
 
-pub fn printSolutionNoPermutations(
-	combo_buffer: *const ComboBuffer,
-	solution_buffer: *SolutionBuffer,
-	index: usize,
-) anyerror!void {
-	// If we've processed all groups, print the current line.
-	if (index == combo_buffer.len) {
-		if (solution_buffer.len > 0) {
-			// Print everything except trailing space
-			try stdout.writeAll(solution_buffer.bytes[0 .. solution_buffer.len - 1]);
-			try stdout.writeByte('\n');
-		}
-		return;
-	}
 
-	// Otherwise, pick `combo_buffer.groups[index].reps` words from .words
-	const group = combo_buffer.groups[index];
-	const needed = group.reps;
-
-	// We'll do an in-place recursion to choose exactly `needed` items from group.words.
-	try combosInPlace2(
-		group.words,
-		needed,
-		0,  // start index in group.words
-		combo_buffer,
-		solution_buffer,
-		index
-	);
-}
-
-// A helper function for "choose `needed` items from `words` (ignoring order)"
-fn combosInPlace2(
-    words: [][]const u8,
-    needed: usize,
-    start_index: usize,
-    combo_buffer: *const ComboBuffer,
-    solution_buffer: *SolutionBuffer,
-    group_index: usize,
-) anyerror!void {
-    // If we've picked all items for this group, move on to next group
-    if (needed == 0) {
-        return printSolutionNoPermutations(combo_buffer, solution_buffer, group_index + 1);
-    }
-
-    // If no more words to choose from
-    if (start_index >= words.len) {
-        return; // no solution at this branch
-    }
-
-    // 1) Pick words[start_index]
-    const w = words[start_index];
-    solution_buffer.appendWord(w);
-    // We still allow picking the same index again, because "combinations with repetition".
-    try combosInPlace2(words, needed - 1, start_index, combo_buffer, solution_buffer, group_index);
-    solution_buffer.removeLast(w.len);
-
-    // 2) Skip words[start_index] => increment start_index
-    try combosInPlace2(words, needed, start_index + 1, combo_buffer, solution_buffer, group_index);
-}
-
-
-pub fn printSolutionDeduped(
+pub fn printSolution(
 	groups: []*const WordGroup,
 	solution_buffer: *SolutionBuffer,
 ) anyerror!void {
@@ -358,55 +285,28 @@ pub fn printSolutionDeduped(
 		}
 		return;
 	}
-
 	const group = groups[0];
 	try combosInPlace(group.words, group.reps, solution_buffer, groups[1..]);
 }
 
+
+// A helper function for choosing combinations of `words` with `reps` repetitions
 fn combosInPlace(
 	words: [][]const u8,
-	needed: usize,
+	reps: usize,
 	solution_buffer: *SolutionBuffer,
 	rest: []*const WordGroup,
 ) anyerror!void {
-	if (needed == 0) {
-		return printSolutionDeduped(rest, solution_buffer);
+	if (reps == 0) {
+		return printSolution(rest, solution_buffer);
 	}
-	if (words.len == 0) {
-		return;
+	for (words, 0..) |word, i| {
+		solution_buffer.appendWord(word);
+		try combosInPlace(words[i..], reps - 1, solution_buffer, rest);
+		solution_buffer.removeLast(word.len);
 	}
-	// pick first word
-	const w = words[0];
-	solution_buffer.appendWord(w);
-	try combosInPlace(words, needed - 1, solution_buffer, rest);
-	solution_buffer.removeLast(w.len);
-	// skip first word
-	try combosInPlace(words[1..], needed, solution_buffer, rest);
 }
 
-// fn combosInPlace(
-// 	words: [][]const u8,
-// 	needed: usize,
-// 	solution_buffer: *SolutionBuffer,
-// 	rest: []*const WordGroup,
-// ) anyerror!void {
-// 	if (needed == 0) {
-// 		return printSolutionDeduped(rest, solution_buffer);
-// 	}
-// 	if (words.len == 0) {
-// 		return;
-// 	}
-
-// 	for (words, 0..) |word, i| {
-// 		// pick first word
-// 		const w = words[0];
-// 		solution_buffer.appendWord(w);
-// 		try combosInPlace(words, needed - 1, solution_buffer, rest);
-// 		solution_buffer.removeLast(w.len);
-// 		// skip first word
-// 		try combosInPlace(words[1..], needed, solution_buffer, rest);
-// 	}
-// }
 fn sumLetterCounts(vec:	[26]u8)	u32	{
 	var sum: u32 = 0;
 	for	(vec) |count| {
@@ -420,9 +320,7 @@ pub fn main() !void	{
 	const allocator	= gpa.allocator();
 	const filename = "/home/josh/.local/bin/words.txt";
 	// const filename = "/home/josh/.local/bin/wordswodupes.txt";
-
-	// bw =	std.io.bufferedWriter(std.io.getStdOut().writer());
-	// defer bw.flush()	catch unreachable;
+	
 
 	// Get command line args
 	var args = try std.process.argsWithAllocator(allocator);
@@ -446,8 +344,7 @@ pub fn main() !void	{
 	}
 
 	const target = input;
-	var target_counts: @Vector(26, u8)  = getLetterCounts(target);
-
+	var target_counts: @Vector(26, u8) = getLetterCounts(target);
 
 	// file processing starts=========================================
 	const file = try std.fs.cwd().openFile(filename, .{});
@@ -472,10 +369,10 @@ pub fn main() !void	{
 	// _ = try file.readAll(buffer);
 
 	var lines = std.mem.splitSequence(u8, buffer, "\n");
+	var nlines: usize = 0;
 
-	// 1) Initialize the map
 	var map = GroupsMap.init(allocator);
-	defer map.deinit(); // We'll build WordGroups from this map, then free it
+	defer map.deinit();
 
 	while (lines.next()) |word| {
 		if (word.len == 0) continue;
@@ -496,27 +393,26 @@ pub fn main() !void	{
 			res.value_ptr.* = std.ArrayList([]const u8).init(allocator);
 			try res.value_ptr.*.append(word);
 		}
-
+		nlines += 1;
 	}
 
 	// file processing ends===========================================
+	std.debug.print("# of words:  {d}\n", .{nlines});
+	std.debug.print("# of combos: {d}\n", .{map.count()});
+
+	// try stdout.print("# of words:  {d}\n", .{nlines});
+	// try stdout.print("# of combos: {d}\n", .{map.count()});
 
 	const groups = try buildWordGroupsFromMap(&map, allocator);
-		defer {
-			// free each group.words
-			// for (groups) |g| {
-			// 	allocator.free(g.words);
-			// }
-			allocator.free(groups);
-		}
-
+	defer  allocator.free(groups);
+	
 	var pointers = try allocator.alloc(*WordGroup, groups.len);
 	defer allocator.free(pointers);
 	for	(groups, 0..) |*combo, i| {
 		pointers[i]	= combo;
 	}
 
-	// sort pointers
+	// sort WordGroup pointers by number of characters for prettiness and potential speed
 	std.sort.block(*WordGroup, pointers, {}, struct {
 		fn lessThan(_: void, a: *WordGroup, b: *WordGroup) bool {
 			return sumLetterCounts(b.counts) < sumLetterCounts(a.counts);
@@ -765,4 +661,9 @@ pub fn main() !void	{
 //         0,
 //     );
 // }
+
+
+
+
+
 
