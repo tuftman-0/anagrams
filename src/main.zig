@@ -1,6 +1,6 @@
 const std =	@import("std");
+const clap = @import("clap");
 const builtin = @import("builtin");
-pub const use_mmap = (builtin.os.tag == .linux or builtin.os.tag == .macos);
 const stdout = std.io.getStdOut().writer();
 
 // OLD: words -> combo word pairs -> filtered combo word pairs -> words grouped by combo
