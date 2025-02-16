@@ -84,8 +84,8 @@ const FileStuff = struct {
     mmap: []align(4096) const u8,
 
     pub fn deinit(self: *FileStuff) void {
-        self.map.deinit();
         std.posix.munmap(@constCast(self.mmap));
+        // self.map.deinit(); // not needed because of arena allocator
     }
 };
 
@@ -202,14 +202,15 @@ const FilterBuffers	= struct {
 		};
 	}
 
-	pub fn deinit(self:	*FilterBuffers)	void {
-		// Free each level's buffer
-		for	(self.buffers) |buffer|	{
-			self.allocator.free(buffer);
-		}
-		// Free the array of buffers
-		self.allocator.free(self.buffers);
-	}
+	// // not needed since we're using an arena allocator
+	// pub fn deinit(self:	*FilterBuffers)	void {
+	// 	// Free each level's buffer
+	// 	for	(self.buffers) |buffer|	{
+	// 		self.allocator.free(buffer);
+	// 	}
+	// 	// Free the array of buffers
+	// 	self.allocator.free(self.buffers);
+	// }
 
 	// Filter items into the buffer at the given depth
 	pub fn filterAtDepth(
@@ -245,9 +246,10 @@ const ComboBuffer =	struct {
 		};
 	}
 
-	pub fn deinit(self:	*ComboBuffer, allocator: std.mem.Allocator)	void {
-		allocator.free(self.groups);
-	}
+	// // not needed since we're using an arena allocator
+	// pub fn deinit(self:	*ComboBuffer, allocator: std.mem.Allocator)	void {
+	// 	allocator.free(self.groups);
+	// }
 
 	pub fn appendGroup(self: *ComboBuffer, group: *WordGroup) void {
 		// if the previous word is the same then just increment count
@@ -326,9 +328,10 @@ const SolutionBuffer = struct {
 		};
 	}
 
-	pub fn deinit(self:	*SolutionBuffer, allocator:	std.mem.Allocator) void	{
-		allocator.free(self.bytes);
-	}
+	// // not needed since we're using an arena allocator
+	// pub fn deinit(self:	*SolutionBuffer, allocator:	std.mem.Allocator) void	{
+	// 	allocator.free(self.bytes);
+	// }
 
 	// Add a word plus a space
 	pub fn appendWord(self:	*SolutionBuffer, word: []const u8) void	{
@@ -387,41 +390,82 @@ fn sumLetterCounts(vec:	[26]u8)	u32	{
 }
 
 pub fn main() !void	{
-	var gpa	= std.heap.GeneralPurposeAllocator(.{}){};
-	const allocator	= gpa.allocator();
-	const filename = "/home/josh/.local/bin/words.txt";
+	// var gpa	= std.heap.GeneralPurposeAllocator(.{}){};
+	// const allocator	= gpa.allocator();
+	var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+	defer arena.deinit();
+	const allocator	= arena.allocator();
+	const err_writer = std.io.getStdErr().writer();
 
-	// Get command line args
-	var args = try std.process.argsWithAllocator(allocator);
-	defer args.deinit();
+	const params = comptime clap.parseParamsComptime(
+		\\-h, --help       Display this help and exit.
+		\\-f, --file <str> Use custom word list file.
+		\\<str>...
+		\\
+	);
 
-	// Skip program name
-	_ =	args.next();
+	var diag = clap.Diagnostic{};
+	const res  = clap.parse(clap.Help, &params, clap.parsers.default, .{
+		.diagnostic = &diag,
+		.allocator  = allocator,
+	}) catch |err| {
+		diag.report(err_writer, err) catch {};
+		return err;
+	};
 
-	// Get input either from args or stdin
-	var input: []const u8 =	undefined;
-	var input_buf: [1024]u8	= undefined;
 
-	if (args.next()) |arg| {
-		// Use command line argument
-		input =	arg;
+
+	const filename = res.args.file orelse "/home/josh/.local/bin/words.txt";
+
+	var input: []const u8 = undefined;
+	var input_buf: [1024]u8 = undefined;
+
+	if (res.args.help != 0) {
+		try clap.help(err_writer, clap.Help, &params, .{});
+		return;
+	}
+	if (res.positionals.len > 0) {
+		// Use first positional argument
+		input = res.positionals[0];
 	} else {
 		// Read from stdin
-		const stdin	= std.io.getStdIn();
+		const stdin = std.io.getStdIn();
 		const bytes_read = try stdin.read(&input_buf);
-		input =	std.mem.trimRight(u8, input_buf[0..bytes_read],	"\r\n");
+		input = std.mem.trimRight(u8, input_buf[0..bytes_read], "\r\n");
 	}
+
+	// Get command line args
+	// var args = try std.process.argsWithAllocator(allocator);
+	// defer args.deinit();
+
+	// // Skip program name
+	// _ =	args.next();
+
+	// // Get input either from args or stdin
+	// var input: []const u8 =	undefined;
+	// var input_buf: [1024]u8	= undefined;
+
+	// if (args.next()) |arg| {
+	// 	// Use command line argument
+	// 	input =	arg;
+	// } else {
+	// 	// Read from stdin
+	// 	const stdin	= std.io.getStdIn();
+	// 	const bytes_read = try stdin.read(&input_buf);
+	// 	input =	std.mem.trimRight(u8, input_buf[0..bytes_read],	"\r\n");
+	// }
 
 	var target_counts: @Vector(26, u8) = getLetterCounts(input);
 
 	var file_stuff = try buildMapFromFile(filename, target_counts, allocator);
-	defer file_stuff.deinit();
+	defer file_stuff.deinit(); // close file
+	var map = file_stuff.map;
 
-	const groups = try buildWordGroupsFromMap(&file_stuff.map, allocator);
-	defer  allocator.free(groups);
+	const groups = try buildWordGroupsFromMap(&map, allocator);
+	// defer  allocator.free(groups);
 	
 	var pointers = try allocator.alloc(*WordGroup, groups.len);
-	defer allocator.free(pointers);
+	// defer allocator.free(pointers);
 	for	(groups, 0..) |*combo, i| {
 		pointers[i]	= combo;
 	}
@@ -435,13 +479,13 @@ pub fn main() !void	{
 
 	// *TODO* this could probably allocate less if we figure out a way to put better bounds on it
 	var combo_buffer = try ComboBuffer.init(input.len,	allocator);
-	defer combo_buffer.deinit(allocator);
+	// defer combo_buffer.deinit(allocator);
 
 	var filter_buffers = try FilterBuffers.init(input.len,	groups.len,	allocator);
-	defer filter_buffers.deinit();
+	// defer filter_buffers.deinit();
 
 	var solution_buffer	= try SolutionBuffer.init(input.len * 2, allocator);
-	defer solution_buffer.deinit(allocator);
+	// defer solution_buffer.deinit(allocator);
 
 	try printAnagrams(
 		&target_counts,
