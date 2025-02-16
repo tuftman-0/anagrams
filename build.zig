@@ -28,13 +28,16 @@ pub fn build(b: *std.Build) void {
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
     // b.installArtifact(lib);
-
     const exe = b.addExecutable(.{
         .name = "anagrams",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+
+	// *TODO* actually use this
+	const clap = b.dependency("clap", .{});
+	exe.root_module.addImport("clap", clap.module("clap"));
 
     // exe.addPackage(.{
     //     .name = "tracy",
