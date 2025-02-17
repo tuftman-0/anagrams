@@ -85,7 +85,6 @@ const FileStuff = struct {
 
     pub fn deinit(self: *FileStuff) void {
         std.posix.munmap(@constCast(self.mmap));
-        // self.map.deinit(); // not needed because of arena allocator
     }
 };
 
@@ -111,7 +110,7 @@ pub fn buildMapFromFile(
 		0,
 	);
 
-	// ***USE FOR WINDOWS*** (will have to change FileStuff to work with this)
+	// // ***USE FOR WINDOWS*** (will have to change FileStuff to work with this)
 	// const buffer = try allocator.alloc(u8, file_size);
 	// defer allocator.free(buffer);
 	// _ = try file.readAll(buffer);
@@ -125,7 +124,6 @@ pub fn buildMapFromFile(
 		const word_counts = getLetterCounts(word);
 		if (!fitsInsideVec(target_counts, word_counts)) continue;
 
-		// Build key
 		const key = ComboKey{ .counts = word_counts };
 
 		// Insert or retrieve existing
@@ -202,16 +200,6 @@ const FilterBuffers	= struct {
 		};
 	}
 
-	// // not needed since we're using an arena allocator
-	// pub fn deinit(self:	*FilterBuffers)	void {
-	// 	// Free each level's buffer
-	// 	for	(self.buffers) |buffer|	{
-	// 		self.allocator.free(buffer);
-	// 	}
-	// 	// Free the array of buffers
-	// 	self.allocator.free(self.buffers);
-	// }
-
 	// Filter items into the buffer at the given depth
 	pub fn filterAtDepth(
 		self: *FilterBuffers,
@@ -246,11 +234,6 @@ const ComboBuffer =	struct {
 		};
 	}
 
-	// // not needed since we're using an arena allocator
-	// pub fn deinit(self:	*ComboBuffer, allocator: std.mem.Allocator)	void {
-	// 	allocator.free(self.groups);
-	// }
-
 	pub fn appendGroup(self: *ComboBuffer, group: *WordGroup) void {
 		// if the previous word is the same then just increment count
 		if (self.len > 0) {
@@ -274,37 +257,35 @@ const ComboBuffer =	struct {
 	}
 };
 
-// prints all the extended anagrams of a particular combination of characters 
 pub fn printAnagrams(
 	target:	*@Vector(26, u8),
-	remaining_combos: []*WordGroup,
+	remaining_groups: []*WordGroup,
 	combo_buffer: *ComboBuffer,
 	filter_buffers:	*FilterBuffers,
 	solution_buffer: *SolutionBuffer,
 	depth: usize,
-) !void	{
+) !void {
 	const zero_vector: @Vector(26, u8) = @splat(0);
 	// once a solution (combination of WordGroups) is reached, print all combinations of words associated with this solution
 	if (fitsInsideVec(zero_vector, target.*)) {
-	// if (std.mem) {
 		const solution = combo_buffer.groups[0..combo_buffer.len];
 		try printSolution(solution, solution_buffer);
 		return;
 	}
-
-	for	(remaining_combos, 0..)	|combo, i| {
+	for	(remaining_groups, 0..)	|combo, i| {
 		target.* = target.*	- combo.counts;
 		combo_buffer.appendGroup(combo);
 
-		const filtered_combos =	filter_buffers.filterAtDepth(
+		const filtered_groups =	filter_buffers.filterAtDepth(
 			depth,
-			remaining_combos[i..],
+			remaining_groups[i..],
 			target.*,
 		);
 
+
 		try printAnagrams(
 			target,
-			filtered_combos,
+			filtered_groups,
 			combo_buffer,
 			filter_buffers,
 			solution_buffer,
@@ -314,6 +295,7 @@ pub fn printAnagrams(
 		target.* = target.*	+ combo.counts;
 	}
 }
+
 
 // holds the solution (string) a combination of words
 const SolutionBuffer = struct {
@@ -327,11 +309,6 @@ const SolutionBuffer = struct {
 			.len = 0,
 		};
 	}
-
-	// // not needed since we're using an arena allocator
-	// pub fn deinit(self:	*SolutionBuffer, allocator:	std.mem.Allocator) void	{
-	// 	allocator.free(self.bytes);
-	// }
 
 	// Add a word plus a space
 	pub fn appendWord(self:	*SolutionBuffer, word: []const u8) void	{
@@ -381,17 +358,20 @@ fn combosInPlace(
 	}
 }
 
-fn sumLetterCounts(vec:	[26]u8)	u32	{
-	var sum: u32 = 0;
-	for	(vec) |count| {
-		sum	+= count;
+fn sumLetterCounts(counts: [26]u8) usize {
+	var sum: usize = 0;
+	for (counts) |count| {
+		sum += count;
 	}
 	return sum;
 }
 
+fn printCombo(combo: [26]u8) void {
+	_ = combo;
+}
+
+
 pub fn main() !void	{
-	// var gpa	= std.heap.GeneralPurposeAllocator(.{}){};
-	// const allocator	= gpa.allocator();
 	var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 	defer arena.deinit();
 	const allocator	= arena.allocator();
@@ -422,6 +402,7 @@ pub fn main() !void	{
 
 	if (res.args.help != 0) {
 		try clap.help(err_writer, clap.Help, &params, .{});
+		// try clap.usage(err_writer, clap.Help, &params);
 		return;
 	}
 	if (res.positionals.len > 0) {
@@ -434,40 +415,20 @@ pub fn main() !void	{
 		input = std.mem.trimRight(u8, input_buf[0..bytes_read], "\r\n");
 	}
 
-	// Get command line args
-	// var args = try std.process.argsWithAllocator(allocator);
-	// defer args.deinit();
-
-	// // Skip program name
-	// _ =	args.next();
-
-	// // Get input either from args or stdin
-	// var input: []const u8 =	undefined;
-	// var input_buf: [1024]u8	= undefined;
-
-	// if (args.next()) |arg| {
-	// 	// Use command line argument
-	// 	input =	arg;
-	// } else {
-	// 	// Read from stdin
-	// 	const stdin	= std.io.getStdIn();
-	// 	const bytes_read = try stdin.read(&input_buf);
-	// 	input =	std.mem.trimRight(u8, input_buf[0..bytes_read],	"\r\n");
-	// }
-
 	var target_counts: @Vector(26, u8) = getLetterCounts(input);
 
 	var file_stuff = try buildMapFromFile(filename, target_counts, allocator);
 	defer file_stuff.deinit(); // close file
 	var map = file_stuff.map;
+	if (map.count() == 0) {
+		return;
+	}
 
 	const groups = try buildWordGroupsFromMap(&map, allocator);
-	// defer  allocator.free(groups);
 	
 	var pointers = try allocator.alloc(*WordGroup, groups.len);
-	// defer allocator.free(pointers);
-	for	(groups, 0..) |*combo, i| {
-		pointers[i]	= combo;
+	for	(groups, 0..) |*group, i| {
+		pointers[i]	= group;
 	}
 
 	// sort WordGroup pointers by number of characters for prettiness and potential speed
@@ -477,15 +438,41 @@ pub fn main() !void	{
 		}
 	}.lessThan);
 
+
+	// find overestimate for max recursion depth by adding the lengths of the smallest wordgroups until we reach the target_len
+	var target_len = sumLetterCounts(target_counts);
+	var max_depth: usize = 1; // minimum depth is 1
+	var i: usize = pointers.len - 1;
+	while (target_len > 0 and i >= 0) : (i -= 1) {
+		const counts = pointers[i].*.counts;
+		const len = sumLetterCounts(counts);
+		target_len -|= len;
+		max_depth += 1;
+		// std.debug.print(": {d}, target_len: {d}, max: {d}\n", .{len, target_len, max_depth});
+	}
+
+	// std.debug.print("input length: {d}\n", .{input.len});
+
+	// for (pointers) |group| {
+	// 	var len: usize = 0;
+	// 	for (group.counts, 0..) |count, j| {
+	// 		if (count == 0) continue;
+	// 		len += count;
+	// 		const idx: u8 = @truncate(j);
+	// 		const char = 'a' + idx;
+	// 		for (0..count) |_| {
+	// 			try stdout.print("{c}", .{char});
+	// 		}
+	// 	}
+	// 	try stdout.print(": {d}\n", .{len});
+	// }
+
 	// *TODO* this could probably allocate less if we figure out a way to put better bounds on it
-	var combo_buffer = try ComboBuffer.init(input.len,	allocator);
-	// defer combo_buffer.deinit(allocator);
+	var combo_buffer = try ComboBuffer.init(max_depth, allocator);
 
-	var filter_buffers = try FilterBuffers.init(input.len,	groups.len,	allocator);
-	// defer filter_buffers.deinit();
+	var filter_buffers = try FilterBuffers.init(max_depth, groups.len, allocator);
 
-	var solution_buffer	= try SolutionBuffer.init(input.len * 2, allocator);
-	// defer solution_buffer.deinit(allocator);
+	var solution_buffer = try SolutionBuffer.init(input.len * 2, allocator);
 
 	try printAnagrams(
 		&target_counts,
