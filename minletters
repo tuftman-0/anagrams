@@ -1,0 +1,30 @@
+Minimal letter counts needed:
+a: 6
+b: 4
+c: 4
+d: 4
+e: 5
+f: 4
+g: 4
+h: 3
+i: 6
+j: 2
+k: 4
+l: 4
+m: 4
+n: 5
+o: 5
+p: 4
+q: 1
+r: 4
+s: 7
+t: 4
+u: 4
+v: 2
+w: 3
+x: 2
+y: 3
+z: 4
+aaaaaabbbbccccddddeeeeeffffgggghhhiiiiiijjkkkkllllmmmmnnnnnoooooppppqrrrrsssssssttttuuuuvvwwwxxyyyzzzz
+
+Total letters needed: 102
