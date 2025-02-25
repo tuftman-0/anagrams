@@ -478,20 +478,19 @@ pub fn main() !void	{
 
 
 	const target_len = sumLetterCounts(target_counts);
-	const max_depth = target_len;
 	// // doesn't really work *TODO* find solution
-	// // find overestimate for max recursion depth by adding the lengths of the smallest wordgroups until we reach the target_len
-	// var target_len = sumLetterCounts(target_counts);
-	// var max_depth: usize = 1; // minimum depth is 1
-	// var i: usize = pointers.len - 1;
-	// while (target_len > 0 and i >= 0) : (i -= 1) {
-	// 	const counts = pointers[i].*.counts;
-	// 	const len = sumLetterCounts(counts);
-	// 	target_len -|= len;
-	// 	max_depth += 1;
-	// 	// std.debug.print(": {d}, target_len: {d}, max: {d}\n", .{len, target_len, max_depth});
-	// }
-	// // std.debug.print("input length: {d}\n", .{input.len});
+	// find overestimate for max recursion depth by adding the lengths of the smallest wordgroups until we reach the target_len
+	var curr_len: usize = 0;
+	var max_depth: usize = 1; // minimum depth is 1
+	var i: usize = pointers.len - 1;
+	while (curr_len < target_len and i > 0) : (i -= 1) {
+		const counts = pointers[i].*.counts;
+		const len = sumLetterCounts(counts);
+		curr_len += len;
+		max_depth += 1;
+		// std.debug.print(": {d}, target_len: {d}, max: {d}\n", .{len, target_len, max_depth});
+	}
+	// std.debug.print("input length: {d}\n", .{input.len});
 
 	// for (pointers) |group| {
 	// 	var len: usize = 0;
@@ -510,7 +509,7 @@ pub fn main() !void	{
 	// *TODO* this could probably allocate less if we figure out a way to put better bounds on it
 	var combo_buffer = try ComboBuffer.init(max_depth, allocator);
 
-	var filter_buffers = try FilterBuffers.init(max_depth, groups.len, allocator);
+	var filter_buffers = try FilterBuffers.init(target_len, groups.len, allocator);
 
 	var solution_buffer = try SolutionBuffer.init(input.len * 2, allocator);
 
