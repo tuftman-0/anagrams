@@ -149,6 +149,7 @@ const WordGroup	= struct {
 	counts:	[26]u8,      // counts of each of the letters
 	words: [][]const u8, // slice of all the words that this combo represents
 	reps: usize,         // number of times that this combination is repeated in a solution
+	len: usize           // total number of letters
 };
 
 // function that takes the map from combos to groups and makes a slice of WordGroups
@@ -172,6 +173,7 @@ pub fn buildWordGroupsFromMap(
 			.counts = combo_key.counts,
 			.words  = entry.value_ptr.items,
 			.reps   = 1,
+			.len    = sumLetterCounts(combo_key.counts),
 		};
 		i += 1;
 	}
@@ -201,11 +203,12 @@ const FilterBuffers	= struct {
 	}
 
 	// Filter items into the buffer at the given depth
+	
 	pub fn filterAtDepth(
 		self: *FilterBuffers,
 		depth: usize,
 		items: []*WordGroup,
-		target:	[26]u8,
+		target:	@Vector(26,u8),
 	) []*WordGroup {
 		const buffer = self.buffers[depth];
 		var size: usize	= 0;
@@ -259,22 +262,24 @@ const ComboBuffer =	struct {
 
 pub fn printAnagrams(
 	target:	*@Vector(26, u8),
+	length: usize,
 	remaining_groups: []*WordGroup,
 	combo_buffer: *ComboBuffer,
 	filter_buffers:	*FilterBuffers,
 	solution_buffer: *SolutionBuffer,
 	depth: usize,
 ) !void {
-	const zero_vector: @Vector(26, u8) = @splat(0);
+	// const zero_vector: @Vector(26, u8) = @splat(0);
 	// once a solution (combination of WordGroups) is reached, print all combinations of words associated with this solution
-	if (fitsInsideVec(zero_vector, target.*)) {
+	// if (fitsInsideVec(zero_vector, target.*)) {
+	if (length == 0) {
 		const solution = combo_buffer.groups[0..combo_buffer.len];
 		try printSolution(solution, solution_buffer);
 		return;
 	}
-	for	(remaining_groups, 0..)	|combo, i| {
-		target.* = target.*	- combo.counts;
-		combo_buffer.appendGroup(combo);
+	for	(remaining_groups, 0..)	|group, i| {
+		target.* = target.*	- group.counts;
+		combo_buffer.appendGroup(group);
 
 		const filtered_groups =	filter_buffers.filterAtDepth(
 			depth,
@@ -282,9 +287,9 @@ pub fn printAnagrams(
 			target.*,
 		);
 
-
 		try printAnagrams(
 			target,
+			length - group.len,
 			filtered_groups,
 			combo_buffer,
 			filter_buffers,
@@ -292,7 +297,7 @@ pub fn printAnagrams(
 			depth +	1,
 		);
 		combo_buffer.removeLast();
-		target.* = target.*	+ combo.counts;
+		target.* = target.*	+ group.counts;
 	}
 }
 
@@ -366,8 +371,14 @@ fn sumLetterCounts(counts: [26]u8) usize {
 	return sum;
 }
 
-fn printCombo(combo: [26]u8) void {
-	_ = combo;
+fn printCombo(combo: [26]u8) !void {
+	for (combo, 0..) |count, i| {
+		const idx: u8 = @truncate(i);
+		const char = 'a' + idx;
+		for (0..count) |_| {
+			try stdout.print("{c}", .{char});
+		}
+	}
 }
 
 
@@ -401,6 +412,7 @@ pub fn main() !void	{
 	var input_buf: [1024]u8 = undefined;
 
 	if (res.args.help != 0) {
+		
 		try clap.help(err_writer, clap.Help, &params, .{});
 		// try clap.usage(err_writer, clap.Help, &params);
 		return;
@@ -416,6 +428,7 @@ pub fn main() !void	{
 	}
 
 	var target_counts: @Vector(26, u8) = getLetterCounts(input);
+	const target_length = sumLetterCounts(target_counts);
 
 	var file_stuff = try buildMapFromFile(filename, target_counts, allocator);
 	defer file_stuff.deinit(); // close file
@@ -425,33 +438,60 @@ pub fn main() !void	{
 	}
 
 	const groups = try buildWordGroupsFromMap(&map, allocator);
-	
-	var pointers = try allocator.alloc(*WordGroup, groups.len);
-	for	(groups, 0..) |*group, i| {
-		pointers[i]	= group;
-	}
 
-	// sort WordGroup pointers by number of characters for prettiness and potential speed
-	std.sort.block(*WordGroup, pointers, {}, struct {
-		fn lessThan(_: void, a: *WordGroup, b: *WordGroup) bool {
-			return sumLetterCounts(b.counts) < sumLetterCounts(a.counts);
+	
+
+	// // sort WordGroups by number of characters for prettiness and potential speed
+	// std.sort.block(WordGroup, groups, {}, struct {
+	// 	fn lessThan(_: void, a: WordGroup, b: WordGroup) bool {
+	// 		return sumLetterCounts(b.counts) < sumLetterCounts(a.counts);
+	// 	}
+	// }.lessThan);
+
+	// sort WordGroups by number of characters for prettiness and potential speed
+	std.sort.block(WordGroup, groups, {}, struct {
+		fn lessThan(_: void, a: WordGroup, b: WordGroup) bool {
+			return b.len < a.len;
 		}
 	}.lessThan);
 
+	// const maxlen = sumLetterCounts(groups[0]);
+	// const minlen = sumLetterCounts(groups[groups.len - 1]);
+	// lengths = allocator.alloc();
+	// for (groups, 0..) |group, i| {  }
+	var pointers = try allocator.alloc(*WordGroup, groups.len);
+	for	(groups, 0..) |*group, i| {
+		pointers[i]	= group;
 
-	// find overestimate for max recursion depth by adding the lengths of the smallest wordgroups until we reach the target_len
-	var target_len = sumLetterCounts(target_counts);
-	var max_depth: usize = 1; // minimum depth is 1
-	var i: usize = pointers.len - 1;
-	while (target_len > 0 and i >= 0) : (i -= 1) {
-		const counts = pointers[i].*.counts;
-		const len = sumLetterCounts(counts);
-		target_len -|= len;
-		max_depth += 1;
-		// std.debug.print(": {d}, target_len: {d}, max: {d}\n", .{len, target_len, max_depth});
 	}
 
-	// std.debug.print("input length: {d}\n", .{input.len});
+	// var length: usize = 0;
+	// for (groups) |group| {
+	// 	if (length != group.len) {
+	// 		if (length != 0) try stdout.writeByte('\n');
+	// 		length = group.len;
+	// 		try stdout.print("length\t{d}:\t", .{length});
+	// 	}
+	// 	try printCombo(group.counts);
+	// 	try stdout.writeByte(' ');
+	// }
+
+
+	const target_len = sumLetterCounts(target_counts);
+	const max_depth = target_len;
+	// // doesn't really work *TODO* find solution
+	// // find overestimate for max recursion depth by adding the lengths of the smallest wordgroups until we reach the target_len
+	// var target_len = sumLetterCounts(target_counts);
+	// var max_depth: usize = 1; // minimum depth is 1
+	// var i: usize = pointers.len - 1;
+	// while (target_len > 0 and i >= 0) : (i -= 1) {
+	// 	const counts = pointers[i].*.counts;
+	// 	const len = sumLetterCounts(counts);
+	// 	target_len -|= len;
+	// 	max_depth += 1;
+	// 	// std.debug.print(": {d}, target_len: {d}, max: {d}\n", .{len, target_len, max_depth});
+	// }
+	// // std.debug.print("input length: {d}\n", .{input.len});
 
 	// for (pointers) |group| {
 	// 	var len: usize = 0;
@@ -474,8 +514,9 @@ pub fn main() !void	{
 
 	var solution_buffer = try SolutionBuffer.init(input.len * 2, allocator);
 
-	try printAnagrams(
+	if (true) try printAnagrams(
 		&target_counts,
+		target_length,
 		pointers,
 		&combo_buffer,
 		&filter_buffers,
