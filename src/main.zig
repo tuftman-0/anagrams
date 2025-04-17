@@ -2,6 +2,9 @@ const std =	@import("std");
 const clap = @import("clap");
 const builtin = @import("builtin");
 const stdout = std.io.getStdOut().writer();
+// *TODO* add windows compatibility (either switch to using universal constructs or make separate windows and linux implementations)
+// *TODO* length based grouping logic for speed
+// *TODO* add proper error handling
 
 // OLD: words -> combo word pairs -> filtered combo word pairs -> words grouped by combo
 // NEW: words -> filter + add into map from combos to groups -> from map create array of WordGroups
@@ -61,7 +64,7 @@ pub fn getLetterCounts(
 		switch (char) {
 			'a'...'z' => { counts[char - 'a'] += 1;	}, // transform lowercase
 			'A'...'Z' => { counts[char - 'A'] += 1;	}, // transform uppercase
-			else	  => {}, //	do nothing
+			else	  => {}, // do nothing
 		}
 	}
 	return counts;
@@ -80,12 +83,12 @@ pub fn fitsInsideVec(
 }
 
 const FileStuff = struct {
-    map: GroupsMap,  // Change from pointer to owned value
-    mmap: []align(4096) const u8,
+	map: GroupsMap,  // Change from pointer to owned value
+	mmap: []align(4096) const u8,
 
-    pub fn deinit(self: *FileStuff) void {
-        std.posix.munmap(@constCast(self.mmap));
-    }
+	pub fn deinit(self: *FileStuff) void {
+		std.posix.munmap(@constCast(self.mmap));
+	}
 };
 
 // function for reading a word list file and building a hashmap
@@ -148,7 +151,6 @@ pub fn buildMapFromFile(
 const WordGroup	= struct {
 	counts:	[26]u8,      // counts of each of the letters
 	words: [][]const u8, // slice of all the words that this combo represents
-	reps: usize,         // number of times that this combination is repeated in a solution
 	len: usize           // total number of letters
 };
 
@@ -172,7 +174,6 @@ pub fn buildWordGroupsFromMap(
 		groups[i] = WordGroup{
 			.counts = combo_key.counts,
 			.words  = entry.value_ptr.items,
-			.reps   = 1,
 			.len    = sumLetterCounts(combo_key.counts),
 		};
 		i += 1;
@@ -182,8 +183,8 @@ pub fn buildWordGroupsFromMap(
 }
 
 // holds buffers used for filtering the arrays of possible WordGroup at each level
-const FilterBuffers	= struct {
-	// Array of slices,	each slice is a buffer for a level
+const FilterBuffers = struct {
+	// Array of slices, each slice is a buffer for a level
 	buffers: [][]*WordGroup,
 	allocator: std.mem.Allocator,
 
@@ -224,38 +225,44 @@ const FilterBuffers	= struct {
 	}
 };
 
+// used for keeping track of repetitions
+const RepeatedGroup = struct {
+	group: *WordGroup,
+	reps: usize,
+};
+
 // is a buffer that holds the current running solution (combination of WordGroups)
-const ComboBuffer =	struct {
-	groups:	[]*WordGroup,
+const ComboBuffer = struct {
+	groups: []RepeatedGroup,
 	len: usize,
 
-	pub fn init(max_depth: usize, allocator: std.mem.Allocator)	!ComboBuffer {
-		const groups = try allocator.alloc(*WordGroup, max_depth);
-		return .{
-			.groups	= groups,
+	pub fn init(max_depth: usize, allocator: std.mem.Allocator) !ComboBuffer {
+		const groups = try allocator.alloc(RepeatedGroup, max_depth);
+		return ComboBuffer{
+			.groups = groups,
 			.len = 0,
 		};
 	}
 
 	pub fn appendGroup(self: *ComboBuffer, group: *WordGroup) void {
-		// if the previous word is the same then just increment count
-		if (self.len > 0) {
-			const last_group_ptr = self.groups[self.len - 1];
-			// if (std.mem.eql(u8, &last_group_ptr.counts, &group.counts)) {
-			if (last_group_ptr == group) {
-				last_group_ptr.reps += 1;
-				return;
-			}
+		// if group is the same as the last group just increment repetitions
+		if (self.len > 0 and self.groups[self.len - 1].group == group) {
+			self.groups[self.len - 1].reps += 1;
+			return;
 		}
-		self.groups[self.len] =	group;
-		self.len +=	1;
+		// otherwise add a group with 1 repetition
+		self.groups[self.len] = RepeatedGroup{
+			.group = group,
+			.reps = 1
+		};
+		self.len += 1;
 	}
 
-	pub fn removeLast(self:	*ComboBuffer) void {
+	pub fn removeLast(self: *ComboBuffer) void {
 		if (self.groups[self.len-1].reps > 1) {
 			self.groups[self.len-1].reps -= 1;
 		} else {
-			self.len -=	1;
+			self.len -= 1;
 		}
 	}
 };
@@ -269,9 +276,7 @@ pub fn printAnagrams(
 	solution_buffer: *SolutionBuffer,
 	depth: usize,
 ) !void {
-	// const zero_vector: @Vector(26, u8) = @splat(0);
 	// once a solution (combination of WordGroups) is reached, print all combinations of words associated with this solution
-	// if (fitsInsideVec(zero_vector, target.*)) {
 	if (length == 0) {
 		const solution = combo_buffer.groups[0..combo_buffer.len];
 		try printSolution(solution, solution_buffer);
@@ -330,19 +335,18 @@ const SolutionBuffer = struct {
 
 // prints all of the combinations of words represented by a solution (combination of WordGroups)
 pub fn printSolution(
-	groups: []*const WordGroup,
+	groups: []RepeatedGroup,
 	solution_buffer: *SolutionBuffer,
 ) anyerror!void {
 	if (groups.len == 0) {
-		// Print the line
 		if (solution_buffer.len > 0) {
-			try stdout.writeAll(solution_buffer.bytes[0 .. solution_buffer.len - 1]);
+			try stdout.writeAll(solution_buffer.bytes[0..solution_buffer.len - 1]);
 			try stdout.writeByte('\n');
 		}
 		return;
 	}
-	const group = groups[0];
-	try combosInPlace(group.words, group.reps, solution_buffer, groups[1..]);
+	const rep_group = groups[0];
+	try combosInPlace(rep_group.group.words, rep_group.reps, solution_buffer, groups[1..]);
 }
 
 
@@ -351,7 +355,7 @@ fn combosInPlace(
 	words: [][]const u8,
 	reps: usize,
 	solution_buffer: *SolutionBuffer,
-	rest: []*const WordGroup,
+	rest: []RepeatedGroup,
 ) anyerror!void {
 	if (reps == 0) {
 		return printSolution(rest, solution_buffer);
@@ -404,22 +408,29 @@ pub fn main() !void	{
 		return err;
 	};
 
-
-
-	const filename = res.args.file orelse "/home/josh/.local/bin/words.txt";
-
-	var input: []const u8 = undefined;
-	var input_buf: [1024]u8 = undefined;
-
 	if (res.args.help != 0) {
-		
 		try clap.help(err_writer, clap.Help, &params, .{});
-		// try clap.usage(err_writer, clap.Help, &params);
 		return;
 	}
+
+	const filename = res.args.file orelse "/home/josh/.local/bin/words.txt";
+	var input: []const u8 = undefined;
+	// max input size is 26*255=6630 letters due to [26]u8 representation but we give extra room for other non letter chars
+	var input_buf: [8192]u8 = undefined;
+
 	if (res.positionals.len > 0) {
-		// Use first positional argument
-		input = res.positionals[0];
+		// input = res.positionals[0][0];
+		// Copy each positional argument into the allocated buffer
+		var offset: usize = 0;
+		for (res.positionals[0]) |arg| {
+			// std.mem.copy(u8, all_input[offset..], arg);  // Copy each argument
+
+			@memcpy(input_buf[offset..(offset+arg.len)], arg);  // Copy each argument
+			offset += arg.len;  // Update the offset for the next argument
+		}
+
+		// Now `all_input` contains the concatenated string from all positionals
+		input = input_buf[0..offset];
 	} else {
 		// Read from stdin
 		const stdin = std.io.getStdIn();
@@ -433,20 +444,12 @@ pub fn main() !void	{
 	var file_stuff = try buildMapFromFile(filename, target_counts, allocator);
 	defer file_stuff.deinit(); // close file
 	var map = file_stuff.map;
-	if (map.count() == 0) {
-		return;
-	}
+	if (map.count() == 0) { return; } // if there are no remaining words end early
 
 	const groups = try buildWordGroupsFromMap(&map, allocator);
 
 	
 
-	// // sort WordGroups by number of characters for prettiness and potential speed
-	// std.sort.block(WordGroup, groups, {}, struct {
-	// 	fn lessThan(_: void, a: WordGroup, b: WordGroup) bool {
-	// 		return sumLetterCounts(b.counts) < sumLetterCounts(a.counts);
-	// 	}
-	// }.lessThan);
 
 	// sort WordGroups by number of characters for prettiness and potential speed
 	std.sort.block(WordGroup, groups, {}, struct {
@@ -465,16 +468,6 @@ pub fn main() !void	{
 
 	}
 
-	// var length: usize = 0;
-	// for (groups) |group| {
-	// 	if (length != group.len) {
-	// 		if (length != 0) try stdout.writeByte('\n');
-	// 		length = group.len;
-	// 		try stdout.print("length\t{d}:\t", .{length});
-	// 	}
-	// 	try printCombo(group.counts);
-	// 	try stdout.writeByte(' ');
-	// }
 
 
 	const target_len = sumLetterCounts(target_counts);
@@ -492,19 +485,6 @@ pub fn main() !void	{
 	}
 	// std.debug.print("input length: {d}\n", .{input.len});
 
-	// for (pointers) |group| {
-	// 	var len: usize = 0;
-	// 	for (group.counts, 0..) |count, j| {
-	// 		if (count == 0) continue;
-	// 		len += count;
-	// 		const idx: u8 = @truncate(j);
-	// 		const char = 'a' + idx;
-	// 		for (0..count) |_| {
-	// 			try stdout.print("{c}", .{char});
-	// 		}
-	// 	}
-	// 	try stdout.print(": {d}\n", .{len});
-	// }
 
 	// *TODO* this could probably allocate less if we figure out a way to put better bounds on it
 	var combo_buffer = try ComboBuffer.init(max_depth, allocator);
