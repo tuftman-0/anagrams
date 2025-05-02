@@ -72,7 +72,8 @@ pub fn getLetterCounts(
 
 // checks if vector a can fit inside vector b
 // used for checking if the set of letters a WordGroup is a subset of the letters in the target
-// I already tried a more complicated system where I also stored the set of nonzero indices in each combination to be checked
+// I already tried a more complicated system where I also stored the set of nonzero indices in each combination
+// to be checked
 // and only checked the values at those indices
 // it was slower than these vector calculations by a very small margin
 pub fn fitsInsideVec(
@@ -276,7 +277,8 @@ pub fn printAnagrams(
 	solution_buffer: *SolutionBuffer,
 	depth: usize,
 ) !void {
-	// once a solution (combination of WordGroups) is reached, print all combinations of words associated with this solution
+	// once a solution (combination of WordGroups) is reached, print all combinations of words associated with
+	// this solution
 	if (length == 0) {
 		const solution = combo_buffer.groups[0..combo_buffer.len];
 		try printSolution(solution, solution_buffer);
@@ -415,7 +417,8 @@ pub fn main() !void	{
 
 	const filename = res.args.file orelse "/home/josh/.local/bin/words.txt";
 	var input: []const u8 = undefined;
-	// max input size is 26*255=6630 letters due to [26]u8 representation but we give extra room for other non letter chars
+	// max number of letters in input is 26*255=6630 letters due to [26]u8 representation
+	// but we give extra room for other non-letter chars
 	var input_buf: [8192]u8 = undefined;
 
 	if (res.positionals.len > 0) {
@@ -472,7 +475,8 @@ pub fn main() !void	{
 
 	const target_len = sumLetterCounts(target_counts);
 	// // doesn't really work *TODO* find solution
-	// find overestimate for max recursion depth by adding the lengths of the smallest wordgroups until we reach the target_len
+	// find overestimate for max recursion depth by adding the lengths of the smallest wordgroups
+	//  until we reach the target_len
 	var curr_len: usize = 0;
 	var max_depth: usize = 1; // minimum depth is 1
 	var i: usize = pointers.len - 1;
