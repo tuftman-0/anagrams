@@ -9,8 +9,8 @@ const stdout = std.io.getStdOut().writer();
 // OLD: words -> combo word pairs -> filtered combo word pairs -> words grouped by combo
 // NEW: words -> filter + add into map from combos to groups -> from map create array of WordGroups
 // WordGroups contain {combination of letters, slice of words represented by that combination , # of repetitions of this group in a solution}
-// in our printAnagrams function we produce every combination of WordGroups that exactly add up to the target
-// once a solution is produce we pass it to the printSolution function
+// in our findAnagrams function we produce every combination of WordGroups that exactly add up to the target
+// once a solution is produce we pass it to the expandSolution function
 // which goes through the lists of words that each WordGroup represents
 // printing all of the combinations of words that exist for that solution
 
@@ -296,7 +296,7 @@ pub fn buildWordGroupsFromMap(
 	return groups[0..length];
 }
 
-pub fn printAnagrams(
+pub fn findAnagrams(
 	target:	*@Vector(26, u8),
 	length: usize,
 	remaining_groups: []*WordGroup,
@@ -309,7 +309,7 @@ pub fn printAnagrams(
 	// this solution
 	if (length == 0) {
 		const solution = combo_buffer.groups[0..combo_buffer.len];
-		try printSolution(solution, solution_buffer);
+		try expandSolution(solution, solution_buffer);
 		return;
 	}
 	for	(remaining_groups, 0..)	|group, i| {
@@ -322,7 +322,7 @@ pub fn printAnagrams(
 			target.*,
 		);
 
-		try printAnagrams(
+		try findAnagrams(
 			target,
 			length - group.len,
 			filtered_groups,
@@ -338,7 +338,7 @@ pub fn printAnagrams(
 
 
 // prints all of the combinations of words represented by a solution (combination of WordGroups)
-pub fn printSolution(
+pub fn expandSolution(
 	groups: []RepeatedGroup,
 	solution_buffer: *SolutionBuffer,
 ) anyerror!void {
@@ -350,23 +350,23 @@ pub fn printSolution(
 		return;
 	}
 	const rep_group = groups[0];
-	try combosInPlace(rep_group.group.words, rep_group.reps, solution_buffer, groups[1..]);
+	try chooseWords(rep_group.group.words, rep_group.reps, solution_buffer, groups[1..]);
 }
 
 
 // A helper function for choosing combinations of `words` with `reps` repetitions
-fn combosInPlace(
+fn chooseWords(
 	words: [][]const u8,
 	reps: usize,
 	solution_buffer: *SolutionBuffer,
 	rest: []RepeatedGroup,
 ) anyerror!void {
 	if (reps == 0) {
-		return printSolution(rest, solution_buffer);
+		return expandSolution(rest, solution_buffer);
 	}
 	for (words, 0..) |word, i| {
 		solution_buffer.appendWord(word);
-		try combosInPlace(words[i..], reps - 1, solution_buffer, rest);
+		try chooseWords(words[i..], reps - 1, solution_buffer, rest);
 		solution_buffer.removeLast(word.len);
 	}
 }
@@ -503,7 +503,7 @@ pub fn main() !void	{
 
 	var solution_buffer = try SolutionBuffer.init(input.len * 2, allocator);
 
-	if (true) try printAnagrams(
+	if (true) try findAnagrams(
 		&target_counts,
 		target_length,
 		pointers,
