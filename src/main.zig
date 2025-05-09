@@ -54,6 +54,127 @@ const ComboKeyHashFns = struct {
 // so each key (letter combo) has a dynamic array of words.
 const GroupsMap = std.HashMap(ComboKey, std.ArrayList([]const u8), ComboKeyHashFns, 85);
 
+
+
+// struct that represents the group of words associated with a particular combination of letters
+const WordGroup	= struct {
+	counts:	[26]u8,      // counts of each of the letters
+	words: [][]const u8, // slice of all the words that this combo represents
+	len: usize           // total number of letters
+};
+
+// holds buffers used for filtering the arrays of possible WordGroup at each level
+const FilterBuffers = struct {
+	// Array of slices, each slice is a buffer for a level
+	buffers: [][]*WordGroup,
+	allocator: std.mem.Allocator,
+
+	pub fn init(max_depth: usize, max_width: usize,	allocator: std.mem.Allocator) !FilterBuffers {
+		const buffers =	try allocator.alloc([]*WordGroup,	max_depth);
+		errdefer allocator.free(buffers);
+
+		// Allocate each level's buffer
+		for	(buffers) |*buffer|	{
+			buffer.* = try allocator.alloc(*WordGroup, max_width);
+		}
+
+		return FilterBuffers{
+			.buffers = buffers,
+			.allocator = allocator,
+		};
+	}
+
+	// Filter items into the buffer at the given depth
+	pub fn filterAtDepth(
+		self: *FilterBuffers,
+		depth: usize,
+		items: []*WordGroup,
+		target:	@Vector(26,u8),
+	) []*WordGroup {
+		const buffer = self.buffers[depth];
+		var size: usize	= 0;
+
+		for	(items)	|item| {
+			if (fitsInsideVec(target, item.counts))	{
+				buffer[size] = item;
+				size +=	1;
+			}
+		}
+
+		return buffer[0..size];
+	}
+};
+
+// used for keeping track of repetitions
+const RepeatedGroup = struct {
+	group: *WordGroup,
+	reps: usize,
+};
+
+// is a buffer that holds the current running solution (combination of WordGroups)
+const ComboBuffer = struct {
+	groups: []RepeatedGroup,
+	len: usize,
+
+	pub fn init(max_depth: usize, allocator: std.mem.Allocator) !ComboBuffer {
+		const groups = try allocator.alloc(RepeatedGroup, max_depth);
+		return ComboBuffer{
+			.groups = groups,
+			.len = 0,
+		};
+	}
+
+	pub fn appendGroup(self: *ComboBuffer, group: *WordGroup) void {
+		// if group is the same as the last group just increment repetitions
+		if (self.len > 0 and self.groups[self.len - 1].group == group) {
+			self.groups[self.len - 1].reps += 1;
+			return;
+		}
+		// otherwise add a group with 1 repetition
+		self.groups[self.len] = RepeatedGroup{
+			.group = group,
+			.reps = 1
+		};
+		self.len += 1;
+	}
+
+	pub fn removeLast(self: *ComboBuffer) void {
+		if (self.groups[self.len-1].reps > 1) {
+			self.groups[self.len-1].reps -= 1;
+		} else {
+			self.len -= 1;
+		}
+	}
+};
+
+// holds the solution (string) a combination of words
+const SolutionBuffer = struct {
+	bytes: []u8,
+	len: usize,
+
+	pub fn init(max_bytes: usize, allocator: std.mem.Allocator)	!SolutionBuffer	{
+		const bytes	= try allocator.alloc(u8, max_bytes);
+		return .{
+			.bytes = bytes,
+			.len = 0,
+		};
+	}
+
+	// Add a word plus a space
+	pub fn appendWord(self:	*SolutionBuffer, word: []const u8) void	{
+		@memcpy(self.bytes[self.len..self.len +	word.len], word);
+		self.bytes[self.len	+ word.len]	= ' ';
+		self.len +=	word.len + 1;
+	}
+
+	// Remove last word plus its trailing space
+	pub fn removeLast(self:	*SolutionBuffer, word_len: usize) void {
+		self.len -=	word_len + 1;
+	}
+};
+
+
+
 //returns a vector of counts for each letter in an input word
 pub fn getLetterCounts(
 	word: []const u8,
@@ -147,14 +268,6 @@ pub fn buildMapFromFile(
 		.mmap = buffer
 	};
 }
-
-// struct that represents the group of words associated with a particular combination of letters
-const WordGroup	= struct {
-	counts:	[26]u8,      // counts of each of the letters
-	words: [][]const u8, // slice of all the words that this combo represents
-	len: usize           // total number of letters
-};
-
 // function that takes the map from combos to groups and makes a slice of WordGroups
 //
 pub fn buildWordGroupsFromMap(
@@ -182,91 +295,6 @@ pub fn buildWordGroupsFromMap(
 
 	return groups[0..length];
 }
-
-// holds buffers used for filtering the arrays of possible WordGroup at each level
-const FilterBuffers = struct {
-	// Array of slices, each slice is a buffer for a level
-	buffers: [][]*WordGroup,
-	allocator: std.mem.Allocator,
-
-	pub fn init(max_depth: usize, max_width: usize,	allocator: std.mem.Allocator) !FilterBuffers {
-		const buffers =	try allocator.alloc([]*WordGroup,	max_depth);
-		errdefer allocator.free(buffers);
-
-		// Allocate each level's buffer
-		for	(buffers) |*buffer|	{
-			buffer.* = try allocator.alloc(*WordGroup, max_width);
-		}
-
-		return FilterBuffers{
-			.buffers = buffers,
-			.allocator = allocator,
-		};
-	}
-
-	// Filter items into the buffer at the given depth
-	
-	pub fn filterAtDepth(
-		self: *FilterBuffers,
-		depth: usize,
-		items: []*WordGroup,
-		target:	@Vector(26,u8),
-	) []*WordGroup {
-		const buffer = self.buffers[depth];
-		var size: usize	= 0;
-
-		for	(items)	|item| {
-			if (fitsInsideVec(target, item.counts))	{
-				buffer[size] = item;
-				size +=	1;
-			}
-		}
-
-		return buffer[0..size];
-	}
-};
-
-// used for keeping track of repetitions
-const RepeatedGroup = struct {
-	group: *WordGroup,
-	reps: usize,
-};
-
-// is a buffer that holds the current running solution (combination of WordGroups)
-const ComboBuffer = struct {
-	groups: []RepeatedGroup,
-	len: usize,
-
-	pub fn init(max_depth: usize, allocator: std.mem.Allocator) !ComboBuffer {
-		const groups = try allocator.alloc(RepeatedGroup, max_depth);
-		return ComboBuffer{
-			.groups = groups,
-			.len = 0,
-		};
-	}
-
-	pub fn appendGroup(self: *ComboBuffer, group: *WordGroup) void {
-		// if group is the same as the last group just increment repetitions
-		if (self.len > 0 and self.groups[self.len - 1].group == group) {
-			self.groups[self.len - 1].reps += 1;
-			return;
-		}
-		// otherwise add a group with 1 repetition
-		self.groups[self.len] = RepeatedGroup{
-			.group = group,
-			.reps = 1
-		};
-		self.len += 1;
-	}
-
-	pub fn removeLast(self: *ComboBuffer) void {
-		if (self.groups[self.len-1].reps > 1) {
-			self.groups[self.len-1].reps -= 1;
-		} else {
-			self.len -= 1;
-		}
-	}
-};
 
 pub fn printAnagrams(
 	target:	*@Vector(26, u8),
@@ -308,32 +336,6 @@ pub fn printAnagrams(
 	}
 }
 
-
-// holds the solution (string) a combination of words
-const SolutionBuffer = struct {
-	bytes: []u8,
-	len: usize,
-
-	pub fn init(max_bytes: usize, allocator: std.mem.Allocator)	!SolutionBuffer	{
-		const bytes	= try allocator.alloc(u8, max_bytes);
-		return .{
-			.bytes = bytes,
-			.len = 0,
-		};
-	}
-
-	// Add a word plus a space
-	pub fn appendWord(self:	*SolutionBuffer, word: []const u8) void	{
-		@memcpy(self.bytes[self.len..self.len +	word.len], word);
-		self.bytes[self.len	+ word.len]	= ' ';
-		self.len +=	word.len + 1;
-	}
-
-	// Remove last word plus its trailing space
-	pub fn removeLast(self:	*SolutionBuffer, word_len: usize) void {
-		self.len -=	word_len + 1;
-	}
-};
 
 // prints all of the combinations of words represented by a solution (combination of WordGroups)
 pub fn printSolution(
@@ -400,6 +402,10 @@ pub fn main() !void	{
 		\\<str>...
 		\\
 	);
+	x = """
+	asdf;lkasjf;asldkfa;
+	as;ldkfj;alksjf;lkjasdf
+	"""
 
 	var diag = clap.Diagnostic{};
 	const res  = clap.parse(clap.Help, &params, clap.parsers.default, .{
