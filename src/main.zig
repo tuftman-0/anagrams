@@ -402,10 +402,6 @@ pub fn main() !void	{
 		\\<str>...
 		\\
 	);
-	x = """
-	asdf;lkasjf;asldkfa;
-	as;ldkfj;alksjf;lkjasdf
-	"""
 
 	var diag = clap.Diagnostic{};
 	const res  = clap.parse(clap.Help, &params, clap.parsers.default, .{
